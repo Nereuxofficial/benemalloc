@@ -1,0 +1,156 @@
+{
+  "lockfile-version": 0,
+  "manifest": {
+    "hook": {},
+    "install": {
+      "cargo-asm": {
+        "pkg-path": "cargo-asm"
+      },
+      "hyperfine": {
+        "pkg-path": "hyperfine"
+      },
+      "valgrind": {
+        "pkg-path": "valgrind"
+      }
+    },
+    "options": {
+      "systems": [
+        "x86_64-linux"
+      ]
+    },
+    "profile": {},
+    "registry": {
+      "defaults": {
+        "subtrees": null
+      },
+      "inputs": {
+        "nixpkgs": {
+          "from": {
+            "owner": "NixOS",
+            "ref": "release-23.11",
+            "repo": "nixpkgs",
+            "type": "github"
+          },
+          "subtrees": [
+            "legacyPackages"
+          ]
+        }
+      },
+      "priority": [
+        "nixpkgs"
+      ]
+    },
+    "vars": {}
+  },
+  "packages": {
+    "x86_64-linux": {
+      "cargo-asm": {
+        "attr-path": [
+          "legacyPackages",
+          "x86_64-linux",
+          "cargo-asm"
+        ],
+        "info": {
+          "broken": false,
+          "description": "Display the assembly or LLVM-IR generated for Rust source code",
+          "license": "MIT",
+          "pname": "cargo-asm",
+          "unfree": false,
+          "version": "2019-12-24"
+        },
+        "input": {
+          "attrs": {
+            "lastModified": 1713185974,
+            "narHash": "sha256-cJpLrxPWLmXPcWhmOkjb/XOFVHL1oXnMiCqtJt1nCns=",
+            "owner": "NixOS",
+            "repo": "nixpkgs",
+            "rev": "674b3abfcc2b7ff4341f9e25781c644a3b7dc541",
+            "type": "github"
+          },
+          "fingerprint": "c0458f32917eee68d86187c886b2d0fa878f26a2a32ead02aa1d8ac4c5822b52",
+          "url": "github:NixOS/nixpkgs/674b3abfcc2b7ff4341f9e25781c644a3b7dc541"
+        },
+        "priority": 5
+      },
+      "hyperfine": {
+        "attr-path": [
+          "legacyPackages",
+          "x86_64-linux",
+          "hyperfine"
+        ],
+        "info": {
+          "broken": false,
+          "description": "Command-line benchmarking tool",
+          "license": null,
+          "pname": "hyperfine",
+          "unfree": false,
+          "version": "1.18.0"
+        },
+        "input": {
+          "attrs": {
+            "lastModified": 1713185974,
+            "narHash": "sha256-cJpLrxPWLmXPcWhmOkjb/XOFVHL1oXnMiCqtJt1nCns=",
+            "owner": "NixOS",
+            "repo": "nixpkgs",
+            "rev": "674b3abfcc2b7ff4341f9e25781c644a3b7dc541",
+            "type": "github"
+          },
+          "fingerprint": "c0458f32917eee68d86187c886b2d0fa878f26a2a32ead02aa1d8ac4c5822b52",
+          "url": "github:NixOS/nixpkgs/674b3abfcc2b7ff4341f9e25781c644a3b7dc541"
+        },
+        "priority": 5
+      },
+      "valgrind": {
+        "attr-path": [
+          "legacyPackages",
+          "x86_64-linux",
+          "valgrind"
+        ],
+        "info": {
+          "broken": false,
+          "description": "Debugging and profiling tool suite",
+          "license": "GPL-2.0-or-later",
+          "pname": "valgrind",
+          "unfree": false,
+          "version": "3.22.0"
+        },
+        "input": {
+          "attrs": {
+            "lastModified": 1713185974,
+            "narHash": "sha256-cJpLrxPWLmXPcWhmOkjb/XOFVHL1oXnMiCqtJt1nCns=",
+            "owner": "NixOS",
+            "repo": "nixpkgs",
+            "rev": "674b3abfcc2b7ff4341f9e25781c644a3b7dc541",
+            "type": "github"
+          },
+          "fingerprint": "c0458f32917eee68d86187c886b2d0fa878f26a2a32ead02aa1d8ac4c5822b52",
+          "url": "github:NixOS/nixpkgs/674b3abfcc2b7ff4341f9e25781c644a3b7dc541"
+        },
+        "priority": 5
+      }
+    }
+  },
+  "registry": {
+    "defaults": {
+      "subtrees": null
+    },
+    "inputs": {
+      "nixpkgs": {
+        "from": {
+          "lastModified": 1713185974,
+          "narHash": "sha256-cJpLrxPWLmXPcWhmOkjb/XOFVHL1oXnMiCqtJt1nCns=",
+          "owner": "NixOS",
+          "repo": "nixpkgs",
+          "rev": "674b3abfcc2b7ff4341f9e25781c644a3b7dc541",
+          "type": "github"
+        },
+        "subtrees": [
+          "legacyPackages"
+        ]
+      }
+    },
+    "priority": [
+      "nixpkgs"
+    ]
+  }
+}
