@@ -1,7 +1,6 @@
 //! This is a simple memory allocator written in Rust.
 #![feature(c_size_t)]
 
-
 use core::ffi::c_size_t;
 use std::{alloc::GlobalAlloc, os::raw::c_void, ptr::null_mut, sync::Mutex};
 
@@ -37,6 +36,7 @@ impl InternalState {
 pub struct BeneAlloc {
     internal_state: Mutex<InternalState>,
 }
+
 impl BeneAlloc {
     pub const fn new() -> Self {
         Self {
@@ -54,11 +54,21 @@ unsafe impl GlobalAlloc for BeneAlloc {
         for i in 0..freeblocks_size {
             if let Some(block) = state_lock.free_array[i] {
                 if block.size >= layout.size() {
-                    // Place the last block at the current position
-                    state_lock.free_array[i] = state_lock.free_array[freeblocks_size - 1];
-                    state_lock.free_array[freeblocks_size - 1] = None;
-                    state_lock.size -= 1;
-                    return block.ptr;
+                    let original_ptr = block.ptr;
+                    if block.size > layout.size() {
+                        // Split the block
+                        let new_block = Block {
+                            size: block.size - layout.size(),
+                            ptr: block.ptr.add(layout.size()),
+                        };
+                        state_lock.free_array[i] = Some(new_block);
+                    } else {
+                        // Place the last block at the current position
+                        state_lock.free_array[i] = state_lock.free_array[freeblocks_size - 1];
+                        state_lock.free_array[freeblocks_size - 1] = None;
+                        state_lock.size -= 1;
+                    }
+                    return original_ptr;
                 }
             }
         }
@@ -67,7 +77,7 @@ unsafe impl GlobalAlloc for BeneAlloc {
         ret as *mut u8
     }
 
-    // The caller must ensure the ptr and layout are valid, so we do not have to keep track of 
+    // The caller must ensure the ptr and layout are valid, so we do not have to keep track of
     // how much memory was allocated for a given pointer
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
         let mut lock = self.internal_state.lock();
@@ -77,14 +87,14 @@ unsafe impl GlobalAlloc for BeneAlloc {
                 size: layout.size(),
                 ptr,
             });
-        }else {
+        } else {
             munmap_size(ptr as *mut c_void, layout.size());
         }
     }
 }
 
 fn malloc(size: c_size_t) -> *mut c_void {
-    let ptr = unsafe {
+    unsafe {
         // With the first argument being zero the kernel picks a page-aligned address to start
         // Then the size(for now is 1024). This is Read/Write Memory so we need those flags.
         // MAP_PRIVATE makes a copy-on-write mapping, where updates to the mapping are not visible to other processes.
@@ -98,11 +108,11 @@ fn malloc(size: c_size_t) -> *mut c_void {
             -1,
             0,
         )
-    };
-    ptr
+    }
 }
 
-/// **SAFETY**: ptr should be a valid pointer into a program allocated structure. size+ptr should never be larger than the allocation bound.
+/// # Safety
+/// ptr should be a valid pointer into a program allocated structure. size+ptr should never be larger than the allocation bound.
 pub unsafe fn munmap_size(ptr: *mut c_void, size: c_size_t) -> i32 {
     munmap(ptr, size)
 }
