@@ -1,8 +1,11 @@
 //! This is a simple memory allocator written in Rust.
 #![feature(c_size_t)]
 
+#[cfg(feature = "track_allocations")]
+mod tracker;
+
 use core::ffi::c_size_t;
-use std::{alloc::GlobalAlloc, os::raw::c_void, ptr::null_mut, sync::Mutex};
+use std::{alloc::GlobalAlloc, os::raw::c_void, ptr::null_mut, sync::{Mutex, OnceLock}};
 
 use libc::{mmap, munmap, MAP_ANON, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 
@@ -15,16 +18,19 @@ struct Block {
 unsafe impl Send for Block {}
 unsafe impl Sync for Block {}
 
+
+
 struct InternalState {
     size: usize,
-    free_array: [Option<Block>; 1024],
+    // TODO: Maybe we could use skip lists to make this more efficient. Also: Thread-local storage for more efficient freeing?
+    free_array: [Option<Block>; 2048],
 }
 
 impl InternalState {
     const fn new() -> Self {
         Self {
             size: 0,
-            free_array: [None; 1024],
+            free_array: [None; 2048],
         }
     }
     fn insert(&mut self, block: Block) {
@@ -68,6 +74,7 @@ unsafe impl GlobalAlloc for BeneAlloc {
                         state_lock.free_array[freeblocks_size - 1] = None;
                         state_lock.size -= 1;
                     }
+                    debug_assert!(original_ptr as usize % layout.align() == 0);
                     return original_ptr;
                 }
             }

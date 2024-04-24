@@ -8,8 +8,6 @@ use rand::{thread_rng, RngCore};
 use std::hint::black_box;
 use std::thread::sleep;
 
-#[global_allocator]
-static ALLOCATOR: BeneAlloc = BeneAlloc::new();
 fn main() {
     let num: usize = 200_000_000;
     let mut rng = thread_rng();
