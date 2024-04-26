@@ -14,3 +14,4 @@ benemalloc aims to be a general-purpose memory allocator written in Rust. Rust i
 - [Rulloc](https://github.com/antoniosarosi/rulloc)
 - [mimalloc](https://github.com/microsoft/mimalloc/)
 - [Memory allocation Strategies](https://www.gingerbill.org/series/memory-allocation-strategies/)
+- [Allocator Designs in Rust](https://os.phil-opp.com/allocator-designs/)

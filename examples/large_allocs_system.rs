@@ -2,11 +2,8 @@
 
 extern crate benemalloc;
 
-use benemalloc::BeneAlloc;
-use rand::prelude::ThreadRng;
 use rand::{thread_rng, RngCore};
 use std::hint::black_box;
-use std::thread::sleep;
 
 fn main() {
     let num: usize = 200_000_000;

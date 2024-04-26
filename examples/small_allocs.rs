@@ -1,7 +1,6 @@
 extern crate benemalloc;
 use benemalloc::BeneAlloc;
-use rand::{Rng, RngCore};
-use std::thread::sleep;
+use rand::RngCore;
 #[global_allocator]
 static ALLOCATOR: BeneAlloc = BeneAlloc::new();
 

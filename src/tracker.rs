@@ -1,6 +1,6 @@
 // TODO: Allow for tracking Allocation and Deallocation of memory
 
-struct Allocation{
+struct Allocation {
     size: usize,
 }
 

@@ -5,7 +5,12 @@
 mod tracker;
 
 use core::ffi::c_size_t;
-use std::{alloc::GlobalAlloc, os::raw::c_void, ptr::null_mut, sync::{Mutex, OnceLock}};
+use std::{
+    alloc::GlobalAlloc,
+    os::raw::c_void,
+    ptr::null_mut,
+    sync::{Mutex, OnceLock},
+};
 
 use libc::{mmap, munmap, MAP_ANON, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 
@@ -17,8 +22,6 @@ struct Block {
 }
 unsafe impl Send for Block {}
 unsafe impl Sync for Block {}
-
-
 
 struct InternalState {
     size: usize,
