@@ -1,10 +1,33 @@
-extern crate benemalloc;
+use std::hint::black_box;
+
 use benemalloc::BeneAlloc;
-use rand::RngCore;
+use rand::{thread_rng, RngCore};
+
 #[global_allocator]
 static ALLOCATOR: BeneAlloc = BeneAlloc::new();
 
-fn main() {
+#[test]
+fn test_large_allocs(){
+   let num: usize = 200_000_000;
+    let mut rng = thread_rng();
+    println!("Allocating {}MB of memory", num * 8 / 1024 / 1024);
+    let mut vec = Vec::with_capacity(num);
+    for _ in 0..vec.capacity() {
+        vec.push(rng.next_u64());
+    }
+    println!(
+        "Sum: {}",
+        black_box(vec.iter().map(|&x| x as u128).sum::<u128>())
+    );
+    for _ in 0..vec.capacity() {
+        vec.pop();
+    }
+    vec.resize(100, 0)
+}
+
+
+#[test]
+fn test_small_allocs(){
     println!("Creating Vector...");
     let mut vec = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     let mut rng = rand::thread_rng();
