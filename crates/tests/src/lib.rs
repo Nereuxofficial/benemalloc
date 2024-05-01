@@ -1,5 +1,7 @@
 use benemalloc::BeneAlloc;
-
+use rand::RngCore;
+use std::hint::black_box;
+use rand::thread_rng;
 #[global_allocator]
 static ALLOCATOR: BeneAlloc = BeneAlloc::new();
 
