@@ -1,15 +1,14 @@
 //! This is a simple memory allocator written in Rust.
+// TODO: Use mremap to grow memory allocations instead of reallocating them
 #![feature(c_size_t)]
 
 #[cfg(feature = "track_allocations")]
 mod tracker;
 
 use core::ffi::c_size_t;
-use std::{
-    alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void, ptr::null_mut, sync::Mutex
-};
+use std::{alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void, ptr::null_mut, sync::Mutex};
 
-use libc::{mmap, munmap, MAP_ANON, MAP_PRIVATE, PROT_READ, PROT_WRITE};
+use allocations::{allocate, deallocate};
 
 // Defines the bounds of a memory block. Rust says ptr is not Thread-safe, however since we are the allocator it should be.
 #[derive(Debug, Copy, Clone)]
@@ -55,7 +54,7 @@ unsafe impl GlobalAlloc for BeneAlloc {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
         let mut lock = self.internal_state.lock();
         let state_lock = lock.as_mut();
-        if state_lock.is_err(){
+        if state_lock.is_err() {
             return null_mut();
         }
         let state_lock = state_lock.unwrap_unchecked();
@@ -64,7 +63,9 @@ unsafe impl GlobalAlloc for BeneAlloc {
             if let Some(block) = state_lock.free_array[i] {
                 // Since align must be a power of two and cannot be zero we can safely do new_unchecked
                 // TODO: This is somehow slower according to mca as align is first converted to NonZero
-                if block.size >= layout.size() && (block.ptr as usize % NonZeroUsize::new_unchecked(layout.align()) == 0){
+                if block.size >= layout.size()
+                    && (block.ptr as usize % NonZeroUsize::new_unchecked(layout.align()) == 0)
+                {
                     let original_ptr = block.ptr;
                     if block.size > layout.size() {
                         // Split the block
@@ -79,12 +80,17 @@ unsafe impl GlobalAlloc for BeneAlloc {
                         state_lock.free_array[freeblocks_size - 1] = None;
                         state_lock.size -= 1;
                     }
-                    debug_assert!(original_ptr as usize % layout.align() == 0, "Alignment error. ptr: {:p}, align: {}", original_ptr, layout.align());
+                    debug_assert!(
+                        original_ptr as usize % layout.align() == 0,
+                        "Alignment error. ptr: {:p}, align: {}",
+                        original_ptr,
+                        layout.align()
+                    );
                     return original_ptr;
                 }
             }
         }
-        let ret = malloc(layout.size());
+        let ret = allocate(layout.size());
         debug_assert!(ret as usize % layout.align() == 0);
         ret as *mut u8
     }
@@ -100,31 +106,10 @@ unsafe impl GlobalAlloc for BeneAlloc {
                 ptr,
             });
         } else {
-            munmap_size(ptr as *mut c_void, layout.size());
+            deallocate(ptr as *mut c_void, layout.size());
         }
     }
+    // TODO: On windows alloc_zeroed initializes the memory to be zero so we could save performance by skipping directly to malloc if we need it...
 }
 
-fn malloc(size: c_size_t) -> *mut c_void {
-    unsafe {
-        // With the first argument being zero the kernel picks a page-aligned address to start
-        // Then the size(for now is 1024). This is Read/Write Memory so we need those flags.
-        // MAP_PRIVATE makes a copy-on-write mapping, where updates to the mapping are not visible to other processes.
-        // MAP_ANON means it is not backed by a file, so fd is ignored, however some implementations want it to be -1 so it's -1
-        // Offset is 0.
-        mmap(
-            null_mut(),
-            size,
-            PROT_READ | PROT_WRITE,
-            MAP_PRIVATE | MAP_ANON,
-            -1,
-            0,
-        )
-    }
-}
 
-/// # Safety
-/// ptr should be a valid pointer into a program allocated structure. size+ptr should never be larger than the allocation bound.
-pub unsafe fn munmap_size(ptr: *mut c_void, size: c_size_t) -> i32 {
-    munmap(ptr, size)
-}

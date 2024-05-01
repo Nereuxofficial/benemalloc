@@ -1,14 +1,11 @@
-use std::hint::black_box;
-
 use benemalloc::BeneAlloc;
-use rand::{thread_rng, RngCore};
 
 #[global_allocator]
 static ALLOCATOR: BeneAlloc = BeneAlloc::new();
 
 #[test]
-fn test_large_allocs(){
-   let num: usize = 200_000_000;
+fn test_large_allocs() {
+    let num: usize = 200_000_000;
     let mut rng = thread_rng();
     println!("Allocating {}MB of memory", num * 8 / 1024 / 1024);
     let mut vec = Vec::with_capacity(num);
@@ -25,9 +22,8 @@ fn test_large_allocs(){
     vec.resize(100, 0)
 }
 
-
 #[test]
-fn test_small_allocs(){
+fn test_small_allocs() {
     println!("Creating Vector...");
     let mut vec = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     let mut rng = rand::thread_rng();

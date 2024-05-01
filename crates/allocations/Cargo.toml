@@ -1,0 +1,10 @@
+[package]
+name = "allocations"
+version = "0.1.0"
+edition = "2021"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.153"
+
+[target.'cfg(windows)'.dependencies]
+windows = "0.56.0"
