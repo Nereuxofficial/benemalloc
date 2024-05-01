@@ -6,10 +6,7 @@ mod tracker;
 
 use core::ffi::c_size_t;
 use std::{
-    alloc::GlobalAlloc,
-    os::raw::c_void,
-    ptr::null_mut,
-    sync::{Mutex, OnceLock},
+    alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void, ptr::null_mut, sync::Mutex
 };
 
 use libc::{mmap, munmap, MAP_ANON, MAP_PRIVATE, PROT_READ, PROT_WRITE};
@@ -56,13 +53,18 @@ impl BeneAlloc {
 
 unsafe impl GlobalAlloc for BeneAlloc {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-        // TODO: Fix alignment. Right now we only have the right alignment accidentally
         let mut lock = self.internal_state.lock();
-        let state_lock = lock.as_mut().unwrap();
+        let state_lock = lock.as_mut();
+        if state_lock.is_err(){
+            return null_mut();
+        }
+        let state_lock = state_lock.unwrap_unchecked();
         let freeblocks_size = state_lock.size;
         for i in 0..freeblocks_size {
             if let Some(block) = state_lock.free_array[i] {
-                if block.size >= layout.size() {
+                // Since align must be a power of two and cannot be zero we can safely do new_unchecked
+                // TODO: This is somehow slower according to mca as align is first converted to NonZero
+                if block.size >= layout.size() && (block.ptr as usize % NonZeroUsize::new_unchecked(layout.align()) == 0){
                     let original_ptr = block.ptr;
                     if block.size > layout.size() {
                         // Split the block
@@ -77,7 +79,7 @@ unsafe impl GlobalAlloc for BeneAlloc {
                         state_lock.free_array[freeblocks_size - 1] = None;
                         state_lock.size -= 1;
                     }
-                    debug_assert!(original_ptr as usize % layout.align() == 0);
+                    debug_assert!(original_ptr as usize % layout.align() == 0, "Alignment error. ptr: {:p}, align: {}", original_ptr, layout.align());
                     return original_ptr;
                 }
             }
