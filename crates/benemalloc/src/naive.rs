@@ -9,12 +9,7 @@ use core::ffi::c_size_t;
 use std::{alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void, ptr::null_mut, sync::Mutex};
 
 use allocations::{allocate, deallocate};
-/* TODO: Implement thread-local storage for more efficient allocation
-#[cfg(not(target_os="macos"))]
-thread_local! { 
-    static CURRENT_THREAD_ALLOCATOR: InternalState = InternalState::new();
-}
-*/
+
 // Defines the bounds of a memory block. Rust says ptr is not Thread-safe, however since we are the allocator it should be.
 #[derive(Debug, Copy, Clone)]
 struct Block {
@@ -26,6 +21,7 @@ unsafe impl Sync for Block {}
 
 struct InternalState {
     size: usize,
+    // TODO: Maybe we could use skip lists to make this more efficient. Also: Thread-local storage for more efficient freeing?
     free_array: [Option<Block>; 2048],
 }
 
