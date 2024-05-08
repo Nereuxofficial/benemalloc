@@ -4,7 +4,7 @@ struct Allocation {
     size: usize,
 }
 
-enum TrakedAllocation {
+enum TrackedAllocation {
     Allocated(Block),
     Deallocated(Block),
 }
