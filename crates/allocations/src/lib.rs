@@ -39,8 +39,8 @@ pub fn allocate(size: u8) -> *mut c_void {
         let flags = Memory::MEM_RESERVE | Memory::MEM_COMMIT;
         // https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc
         let address = Memory::VirtualAlloc(None, length, flags, protection);
-
-        NonNull::new(address.cast())
+        // In an allocator we shall return zero if the allocation failed. Panicing during an allocation is undefined behavior
+        address
     }
 }
 
