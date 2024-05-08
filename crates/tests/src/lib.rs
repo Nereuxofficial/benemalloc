@@ -69,3 +69,12 @@ fn test_threads(){
         handle.join().unwrap();
     }
 }
+
+#[test]
+fn test_box_allocation(){
+    let mut value = Box::new(10);
+    *value = 20;
+    println!("Value: {}", value);
+    let new_value = Box::new(30);
+    println!("New Value: {}", new_value);
+}
