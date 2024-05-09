@@ -96,13 +96,21 @@ unsafe impl GlobalAlloc for BeneAlloc {
         ret as *mut u8
     }
 
-    // The caller must ensure the ptr and layout are valid, so we do not have to keep track of
-    // how much memory was allocated for a given pointer
+    /// The caller must ensure the ptr and layout are valid, so we do not have to keep track of
+    /// how much memory was allocated for a given pointer. This helps us, because we do not have to
+    /// modify the allocated list in other threads, which would require some kind of synchronization.
+    /// Instead we can add it to the local `free` list or deallocate it directly.
+    ///
+    /// # Safety
+    /// The caller must ensure ptr and layout are valid. Additionally, the ptr may not be used after this function is called as any use would be UAF
+    /// The caller must ensure the ptr was allocated by this allocator. This may actually be a larger
+    /// limitation than originally thought, as memory allocated from outside Rust(like from C)
+    /// will be allocated correctly, however the old allocator will not know about it and will still track it as
+    /// used memory, which may cause double frees to not be detected
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
-        let mut lock = self.internal_state.lock();
-        let state_lock = lock.as_mut().unwrap();
-        if state_lock.size < state_lock.free_array.len() {
-            state_lock.insert(Block {
+        let mut state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
+        if state.size < state.free_array.len() {
+            state.insert(Block {
                 size: layout.size(),
                 ptr,
             });
