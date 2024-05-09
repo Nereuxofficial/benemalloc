@@ -1,9 +1,10 @@
 use benemalloc::BeneAlloc;
 use rand::RngCore;
-use std::hint::black_box;
+use std::{collections::BinaryHeap, hint::black_box, thread::available_parallelism};
 use rand::thread_rng;
 #[global_allocator]
 static ALLOCATOR: BeneAlloc = BeneAlloc::new();
+
 
 #[test]
 fn test_large_allocs() {
@@ -48,4 +49,32 @@ fn test_small_allocs() {
     for _ in 0..100 {
         hashmap.insert(rng.next_u64(), rng.next_u64());
     }
+    let binary_heap = BinaryHeap::from(vec);
+    let mut vec = binary_heap.into_sorted_vec();
+    vec.into_iter().take(10).for_each(|(k, v)| {
+        println!("Key: {}, Value: {}", k, v);
+    });
+}
+
+#[test]
+fn test_threads(){
+    let mut handles = vec![];
+    for _ in 0..available_parallelism().unwrap().get() {
+        let handle = std::thread::spawn(|| {
+            test_small_allocs();
+        });
+        handles.push(handle);
+    }
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
+
+#[test]
+fn test_box_allocation(){
+    let mut value = Box::new(10);
+    *value = 20;
+    println!("Value: {}", value);
+    let new_value = Box::new(30);
+    println!("New Value: {}", new_value);
 }

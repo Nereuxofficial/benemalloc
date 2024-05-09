@@ -7,3 +7,7 @@ edition = "2021"
 
 [dependencies]
 allocations ={ path = "../allocations"}
+
+[features]
+default = []
+track_allocations = []
