@@ -7,4 +7,4 @@ edition = "2021"
 libc = "0.2.153"
 
 [target.'cfg(windows)'.dependencies]
-windows = "0.56.0"
+windows = { version = "0.56.0", features = ["Win32_System", "Win32_System_Memory_NonVolatile"] }

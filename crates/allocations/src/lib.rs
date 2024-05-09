@@ -33,12 +33,12 @@ pub unsafe fn deallocate(ptr: *mut c_void, size: size_t) -> i32 {
 }
 
 #[cfg(windows)]
-pub fn allocate(size: u8) -> *mut c_void {
+pub fn allocate(size: usize) -> *mut c_void {
     unsafe {
         let protection = Memory::PAGE_READWRITE;
         let flags = Memory::MEM_RESERVE | Memory::MEM_COMMIT;
         // https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc
-        let address = Memory::VirtualAlloc(None, length, flags, protection);
+        let address = Memory::VirtualAlloc(None, size, flags, protection);
 
         NonNull::new(address.cast())
     }
@@ -46,7 +46,7 @@ pub fn allocate(size: u8) -> *mut c_void {
 
 /// # Safety
 /// ptr should be a valid pointer into a program allocated structure. size+ptr should never be larger than the allocation bound.
-/// Furthermore ptr should no longer be stored as it is a dangling pointer after deallocation
+/// Furthermore, ptr should no longer be stored as it is a dangling pointer after deallocation and using it is Use-After-Free
 #[cfg(windows)]
 pub unsafe fn deallocate(ptr: *mut c_void, size: size_t) -> i32 {
     // https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualfree
