@@ -15,7 +15,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        toolchain: [stable, nightly]
+        toolchain: [nightly]
     runs-on: ${{ matrix.os }}
     steps:
 
