@@ -1,7 +1,8 @@
 use benemalloc::BeneAlloc;
 use rand::RngCore;
-use std::{collections::BinaryHeap, hint::black_box, thread::available_parallelism};
+use std::{collections::BinaryHeap, hint::black_box, thread, thread::available_parallelism};
 use rand::thread_rng;
+
 #[global_allocator]
 static ALLOCATOR: BeneAlloc = BeneAlloc::new();
 
@@ -75,6 +76,11 @@ fn test_box_allocation(){
     let mut value = Box::new(10);
     *value = 20;
     println!("Value: {}", value);
+    drop(value);
     let new_value = Box::new(30);
     println!("New Value: {}", new_value);
+    thread::spawn(move || {
+        println!("New Value: {}", new_value);
+        drop(new_value);
+    }).join().unwrap();
 }

@@ -7,14 +7,16 @@ mod tracker;
 
 use core::ffi::c_size_t;
 use std::{alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void, ptr::null_mut, sync::Mutex};
+use std::cell::UnsafeCell;
 
 use allocations::{allocate, deallocate};
-/* TODO: Implement thread-local storage for more efficient allocation
+
 #[cfg(not(target_os="macos"))]
 thread_local! { 
-    static CURRENT_THREAD_ALLOCATOR: InternalState = InternalState::new();
+    // TODO: Wrap in a UnsafeCell or Cell for mutable access
+    static CURRENT_THREAD_ALLOCATOR: UnsafeCell<InternalState> =  UnsafeCell::new(InternalState::new());
 }
-*/
+
 // Defines the bounds of a memory block. Rust says ptr is not Thread-safe, however since we are the allocator it should be.
 #[derive(Debug, Copy, Clone)]
 struct Block {
@@ -26,14 +28,14 @@ unsafe impl Sync for Block {}
 
 struct InternalState {
     size: usize,
-    free_array: [Option<Block>; 2048],
+    free_array: [Option<Block>; 512],
 }
 
 impl InternalState {
     const fn new() -> Self {
         Self {
             size: 0,
-            free_array: [None; 2048],
+            free_array: [None; 512],
         }
     }
     fn insert(&mut self, block: Block) {
@@ -56,15 +58,10 @@ impl BeneAlloc {
 
 unsafe impl GlobalAlloc for BeneAlloc {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-        let mut lock = self.internal_state.lock();
-        let state_lock = lock.as_mut();
-        if state_lock.is_err() {
-            return null_mut();
-        }
-        let state_lock = state_lock.unwrap_unchecked();
-        let freeblocks_size = state_lock.size;
+        let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
+        let freeblocks_size = state.size;
         for i in 0..freeblocks_size {
-            if let Some(block) = state_lock.free_array[i] {
+            if let Some(block) = state.free_array[i] {
                 // Since align must be a power of two and cannot be zero we can safely do new_unchecked
                 // TODO: This is somehow slower according to mca as align is first converted to NonZero
                 if block.size >= layout.size()
@@ -77,12 +74,12 @@ unsafe impl GlobalAlloc for BeneAlloc {
                             size: block.size - layout.size(),
                             ptr: block.ptr.add(layout.size()),
                         };
-                        state_lock.free_array[i] = Some(new_block);
+                        state.free_array[i] = Some(new_block);
                     } else {
                         // Place the last block at the current position
-                        state_lock.free_array[i] = state_lock.free_array[freeblocks_size - 1];
-                        state_lock.free_array[freeblocks_size - 1] = None;
-                        state_lock.size -= 1;
+                        state.free_array[i] = state.free_array[freeblocks_size - 1];
+                        state.free_array[freeblocks_size - 1] = None;
+                        state.size -= 1;
                     }
                     debug_assert!(
                         original_ptr as usize % layout.align() == 0,
@@ -99,13 +96,21 @@ unsafe impl GlobalAlloc for BeneAlloc {
         ret as *mut u8
     }
 
-    // The caller must ensure the ptr and layout are valid, so we do not have to keep track of
-    // how much memory was allocated for a given pointer
+    /// The caller must ensure the ptr and layout are valid, so we do not have to keep track of
+    /// how much memory was allocated for a given pointer. This helps us, because we do not have to
+    /// modify the allocated list in other threads, which would require some kind of synchronization.
+    /// Instead, we can add it to the local `free` list or deallocate it directly.
+    ///
+    /// # Safety
+    /// The caller must ensure ptr and layout are valid. Additionally, the ptr may not be used after this function is called as any use would be UAF
+    /// The caller must ensure the ptr was allocated by this allocator. This may actually be a larger
+    /// limitation than originally thought, as memory allocated from outside Rust(like from C)
+    /// will be allocated correctly, however the old allocator will not know about it and will still track it as
+    /// used memory, which may cause double frees to not be detected
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
-        let mut lock = self.internal_state.lock();
-        let state_lock = lock.as_mut().unwrap();
-        if state_lock.size < state_lock.free_array.len() {
-            state_lock.insert(Block {
+        let mut state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
+        if state.size < state.free_array.len() {
+            state.insert(Block {
                 size: layout.size(),
                 ptr,
             });
