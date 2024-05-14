@@ -7,13 +7,13 @@
 mod tracker;
 
 use core::ffi::c_size_t;
-use std::{alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void, ptr::null_mut, sync::Mutex};
 use std::cell::UnsafeCell;
+use std::{alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void, ptr::null_mut, sync::Mutex};
 
 use allocations::{allocate, deallocate};
 
-#[cfg(not(target_os="macos"))]
-thread_local! { 
+#[cfg(not(target_os = "macos"))]
+thread_local! {
     // TODO: Wrap in a UnsafeCell or Cell for mutable access
     static CURRENT_THREAD_ALLOCATOR: UnsafeCell<InternalState> =  UnsafeCell::new(InternalState::new());
 }
@@ -121,5 +121,3 @@ unsafe impl GlobalAlloc for BeneAlloc {
     }
     // TODO: On windows alloc_zeroed initializes the memory to be zero so we could save performance by skipping directly to malloc if we need it...
 }
-
-
