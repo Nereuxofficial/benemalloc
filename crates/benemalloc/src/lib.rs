@@ -99,7 +99,7 @@ unsafe impl GlobalAlloc for BeneAlloc {
     /// The caller must ensure the ptr and layout are valid, so we do not have to keep track of
     /// how much memory was allocated for a given pointer. This helps us, because we do not have to
     /// modify the allocated list in other threads, which would require some kind of synchronization.
-    /// Instead we can add it to the local `free` list or deallocate it directly.
+    /// Instead, we can add it to the local `free` list or deallocate it directly.
     ///
     /// # Safety
     /// The caller must ensure ptr and layout are valid. Additionally, the ptr may not be used after this function is called as any use would be UAF
