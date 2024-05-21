@@ -8,7 +8,7 @@ mod tracker;
 
 use core::ffi::c_size_t;
 use std::cell::UnsafeCell;
-use std::{alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void, ptr::null_mut, sync::Mutex};
+use std::{alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void, sync::Mutex};
 
 use allocations::{allocate, deallocate};
 
