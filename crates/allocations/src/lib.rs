@@ -1,9 +1,8 @@
-use std::{ffi::c_void, };
 use libc::size_t;
+use std::ffi::c_void;
 
 #[cfg(windows)]
 use windows::Win32::System::{Memory, SystemInformation};
-
 
 #[cfg(unix)]
 use libc::{mmap, munmap, MAP_ANON, MAP_PRIVATE, PROT_READ, PROT_WRITE};
@@ -57,8 +56,8 @@ pub unsafe fn deallocate(ptr: *mut c_void, size: size_t) -> i32 {
     // We can apparently SKIP the length which is really confusing...
     let length = 0;
     let flags = Memory::MEM_RELEASE;
-    match Memory::VirtualFree(ptr, length, flags){
+    match Memory::VirtualFree(ptr, length, flags) {
         Ok(()) => 0,
-        _ => -1
+        _ => -1,
     }
 }
