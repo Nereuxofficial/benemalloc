@@ -58,7 +58,7 @@ pub unsafe fn deallocate(ptr: *mut c_void, size: size_t) -> i32 {
     let length = 0;
     let flags = Memory::MEM_RELEASE;
     match Memory::VirtualFree(ptr, length, flags){
-        () => 0,
+        Ok(()) => 0,
         _ => -1
     }
 }
