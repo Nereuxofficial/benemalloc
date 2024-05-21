@@ -1,10 +1,14 @@
-use std::{ffi::c_void, ptr::null_mut};
+use std::{ffi::c_void, };
+use libc::size_t;
 
 #[cfg(windows)]
 use windows::Win32::System::{Memory, SystemInformation};
 
+
 #[cfg(unix)]
-use libc::{mmap, munmap, size_t, MAP_ANON, MAP_PRIVATE, PROT_READ, PROT_WRITE};
+use libc::{mmap, munmap, MAP_ANON, MAP_PRIVATE, PROT_READ, PROT_WRITE};
+#[cfg(unix)]
+use std::ptr::null_mut;
 
 #[cfg(unix)]
 pub fn allocate(size: size_t) -> *mut c_void {
@@ -38,7 +42,7 @@ pub fn allocate(size: usize) -> *mut c_void {
         let protection = Memory::PAGE_READWRITE;
         let flags = Memory::MEM_RESERVE | Memory::MEM_COMMIT;
         // https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc
-        let address = Memory::VirtualAlloc(None, length, flags, protection);
+        let address = Memory::VirtualAlloc(None, size, flags, protection);
         // In an allocator we shall return zero if the allocation failed. Panicing during an allocation is undefined behavior
         address
     }
@@ -53,5 +57,8 @@ pub unsafe fn deallocate(ptr: *mut c_void, size: size_t) -> i32 {
     // We can apparently SKIP the length which is really confusing...
     let length = 0;
     let flags = Memory::MEM_RELEASE;
-    Memory::VirtualFree(ptr, length, flags)
+    match Memory::VirtualFree(ptr, length, flags){
+        () => 0,
+        _ => -1
+    }
 }
