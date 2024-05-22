@@ -14,7 +14,6 @@ use allocations::{allocate, deallocate};
 
 #[cfg(not(target_os = "macos"))]
 thread_local! {
-    // TODO: Wrap in a UnsafeCell or Cell for mutable access
     static CURRENT_THREAD_ALLOCATOR: UnsafeCell<InternalState<512>> = const {UnsafeCell::new(InternalState::new()) };
 }
 
@@ -32,11 +31,11 @@ struct InternalState<const Size: usize> {
     free_array: [Option<Block>; Size],
 }
 
-impl<const Size: usize> InternalState<Size> {
+impl<const SIZE: usize> InternalState<SIZE> {
     const fn new() -> Self {
         Self {
             size: 0,
-            free_array: [None; Size],
+            free_array: [None; SIZE],
         }
     }
     fn insert(&mut self, block: Block) {
@@ -57,6 +56,7 @@ impl BeneAlloc {
 
 unsafe impl GlobalAlloc for BeneAlloc {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        // TODO: Get rid of bounds checks
         let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
         let freeblocks_size = state.size;
         for i in 0..freeblocks_size {
