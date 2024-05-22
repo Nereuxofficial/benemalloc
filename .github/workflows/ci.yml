@@ -38,6 +38,11 @@ jobs:
 
       - name: Run cargo test
         run: cargo test -- --test-threads=1
+
+      - name: Run cargo test with cargo-careful
+        run: |
+          cargo install cargo-careful
+          cargo careful test
       - name: Run cargo doc
         if: ${{ runner.os == 'Linux' }}
         run: cargo doc --no-deps --document-private-items --all-features
