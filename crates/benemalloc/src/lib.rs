@@ -45,26 +45,36 @@ impl<const SIZE: usize> InternalState<SIZE> {
 }
 
 pub struct BeneAlloc {
+    #[cfg(feature = "track_allocations")]
+    tracker: Mutex<tracker::Tracker>,
 }
 
 impl BeneAlloc {
     pub const fn new() -> Self {
         Self {
+            #[cfg(feature = "track_allocations")]
+            tracker: Mutex::new(tracker::Tracker::new()),
         }
     }
 }
 
 unsafe impl GlobalAlloc for BeneAlloc {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        #[cfg(feature = "track_allocations")]
+        {
+            let mut tracker = self.tracker.lock().unwrap();
+            tracker.track_allocation(layout);
+        }
         // TODO: Get rid of bounds checks
         let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
         let freeblocks_size = state.size;
+        let align = NonZeroUsize::new_unchecked(layout.align());
         for i in 0..freeblocks_size {
             if let Some(block) = state.free_array[i] {
                 // Since align must be a power of two and cannot be zero we can safely do new_unchecked
                 // TODO: This is somehow slower according to mca as align is first converted to NonZero
                 if block.size >= layout.size()
-                    && (block.ptr as usize % NonZeroUsize::new_unchecked(layout.align()) == 0)
+                    && (block.ptr as usize % align) == 0
                 {
                     let original_ptr = block.ptr;
                     if block.size > layout.size() {
@@ -107,6 +117,11 @@ unsafe impl GlobalAlloc for BeneAlloc {
     /// will be allocated correctly, however the old allocator will not know about it and will still track it as
     /// used memory, which may cause double frees to not be detected
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        #[cfg(feature = "track_allocations")]
+        {
+            let mut tracker = self.tracker.lock().unwrap();
+            tracker.track_deallocation(layout);
+        }
         let mut state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
         if state.size < state.free_array.len() {
             state.insert(Block {
