@@ -15,7 +15,7 @@ use allocations::{allocate, deallocate};
 #[cfg(not(target_os = "macos"))]
 thread_local! {
     // TODO: Wrap in a UnsafeCell or Cell for mutable access
-    static CURRENT_THREAD_ALLOCATOR: UnsafeCell<InternalState> =  UnsafeCell::new(InternalState::new());
+    static CURRENT_THREAD_ALLOCATOR: UnsafeCell<InternalState<512>> = const {UnsafeCell::new(InternalState::new()) };
 }
 
 // Defines the bounds of a memory block. Rust says ptr is not Thread-safe, however since we are the allocator it should be.
@@ -27,16 +27,16 @@ struct Block {
 unsafe impl Send for Block {}
 unsafe impl Sync for Block {}
 
-struct InternalState {
+struct InternalState<const Size: usize> {
     size: usize,
-    free_array: [Option<Block>; 512],
+    free_array: [Option<Block>; Size],
 }
 
-impl InternalState {
+impl<const Size: usize> InternalState<Size> {
     const fn new() -> Self {
         Self {
             size: 0,
-            free_array: [None; 512],
+            free_array: [None; Size],
         }
     }
     fn insert(&mut self, block: Block) {
@@ -46,13 +46,11 @@ impl InternalState {
 }
 
 pub struct BeneAlloc {
-    internal_state: Mutex<InternalState>,
 }
 
 impl BeneAlloc {
     pub const fn new() -> Self {
         Self {
-            internal_state: Mutex::new(InternalState::new()),
         }
     }
 }
