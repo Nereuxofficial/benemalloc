@@ -8,3 +8,7 @@ edition = "2021"
 [dependencies]
 benemalloc = { path = "../benemalloc" }
 rand = "0.8"
+
+[features]
+default = []
+track_allocations = ["benemalloc/track_allocations"]

@@ -46,7 +46,7 @@ impl<const SIZE: usize> InternalState<SIZE> {
 
 pub struct BeneAlloc {
     #[cfg(feature = "track_allocations")]
-    tracker: Mutex<tracker::Tracker>,
+    pub tracker: Mutex<tracker::Tracker>,
 }
 
 impl BeneAlloc {
@@ -55,6 +55,11 @@ impl BeneAlloc {
             #[cfg(feature = "track_allocations")]
             tracker: Mutex::new(tracker::Tracker::new()),
         }
+    }
+    
+    #[cfg(feature = "track_allocations")]
+    pub fn print(&self) {
+        self.tracker.lock().unwrap().print();
     }
 }
 

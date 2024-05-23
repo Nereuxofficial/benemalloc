@@ -22,14 +22,18 @@ fn test_large_allocs() {
     for _ in 0..vec.capacity() {
         vec.pop();
     }
-    vec.resize(100, 0)
+    vec.resize(100, 0);
+    #[cfg(feature = "track_allocations")]
+    {
+        ALLOCATOR.print();
+    }
 }
 
 #[test]
 fn test_small_allocs() {
     println!("Creating Vector...");
     let mut vec = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-    let mut rng = rand::thread_rng();
+    let mut rng = thread_rng();
     for _ in 0..100 {
         vec.push(2);
     }
@@ -54,6 +58,10 @@ fn test_small_allocs() {
     vec.into_iter().take(10).for_each(|(k, v)| {
         println!("Key: {}, Value: {}", k, v);
     });
+    #[cfg(feature = "track_allocations")]
+    {
+        ALLOCATOR.print();
+    }
 }
 
 #[test]
@@ -67,6 +75,10 @@ fn test_threads() {
     }
     for handle in handles {
         handle.join().unwrap();
+    }
+    #[cfg(feature = "track_allocations")]
+    {
+        ALLOCATOR.print();
     }
 }
 
@@ -84,4 +96,8 @@ fn test_box_allocation() {
     })
     .join()
     .unwrap();
+    #[cfg(feature = "track_allocations")]
+    {
+        ALLOCATOR.print();
+    }
 }
