@@ -46,20 +46,25 @@ impl<const SIZE: usize> InternalState<SIZE> {
 
 pub struct BeneAlloc {
     #[cfg(feature = "track_allocations")]
-    pub tracker: Mutex<tracker::Tracker>,
+    pub tracker: UnsafeCell<tracker::Tracker>,
 }
+
+unsafe impl Sync for BeneAlloc {}
+unsafe impl Send for BeneAlloc {}
 
 impl BeneAlloc {
     pub const fn new() -> Self {
         Self {
             #[cfg(feature = "track_allocations")]
-            tracker: Mutex::new(tracker::Tracker::new()),
+            tracker: UnsafeCell::new(tracker::Tracker::new()),
         }
     }
     
     #[cfg(feature = "track_allocations")]
     pub fn print(&self) {
-        self.tracker.lock().unwrap().print();
+        unsafe {
+            self.tracker.get().as_ref().unwrap().print();
+        }
     }
 }
 
@@ -67,7 +72,7 @@ unsafe impl GlobalAlloc for BeneAlloc {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
         #[cfg(feature = "track_allocations")]
         {
-            let mut tracker = self.tracker.lock().unwrap();
+            let mut tracker = self.tracker.get().as_mut().unwrap();
             tracker.track_allocation(layout);
         }
         // TODO: Get rid of bounds checks
@@ -124,7 +129,7 @@ unsafe impl GlobalAlloc for BeneAlloc {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
         #[cfg(feature = "track_allocations")]
         {
-            let mut tracker = self.tracker.lock().unwrap();
+            let mut tracker = self.tracker.get().as_mut().unwrap();
             tracker.track_deallocation(layout);
         }
         let mut state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
