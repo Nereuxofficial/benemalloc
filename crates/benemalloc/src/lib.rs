@@ -59,7 +59,7 @@ impl BeneAlloc {
             tracker: UnsafeCell::new(tracker::Tracker::new()),
         }
     }
-    
+
     #[cfg(feature = "track_allocations")]
     pub fn print(&self) {
         unsafe {
@@ -83,9 +83,7 @@ unsafe impl GlobalAlloc for BeneAlloc {
             if let Some(block) = state.free_array[i] {
                 // Since align must be a power of two and cannot be zero we can safely do new_unchecked
                 // TODO: This is somehow slower according to mca as align is first converted to NonZero
-                if block.size >= layout.size()
-                    && (block.ptr as usize % align) == 0
-                {
+                if block.size >= layout.size() && (block.ptr as usize % align) == 0 {
                     let original_ptr = block.ptr;
                     if block.size > layout.size() {
                         // Split the block
