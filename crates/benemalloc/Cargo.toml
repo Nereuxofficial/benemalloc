@@ -1,6 +1,6 @@
 [package]
 name = "benemalloc"
-version = "0.1.0"
+version = "0.1.0-BETA"
 edition = "2021"
 description = "WIP: A fast, general-purpose memory allocator for Rust"
 license = "GPL-3.0-only"

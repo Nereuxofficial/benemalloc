@@ -1,6 +1,6 @@
 [package]
 name = "allocations"
-version = "0.1.0"
+version = "0.1.0-BETA"
 edition = "2021"
 description = "Thin cross-platform functions for memory allocation, deallocation and reallocation"
 license = "GPL-3.0-only"

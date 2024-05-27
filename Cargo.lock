@@ -4,7 +4,7 @@ version = 3
 
 [[package]]
 name = "allocations"
-version = "0.1.0"
+version = "0.1.0-BETA"
 dependencies = [
  "libc",
  "windows",
@@ -12,7 +12,7 @@ dependencies = [
 
 [[package]]
 name = "benemalloc"
-version = "0.1.0"
+version = "0.1.0-BETA"
 dependencies = [
  "allocations",
 ]
