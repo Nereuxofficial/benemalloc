@@ -2,6 +2,11 @@
 name = "allocations"
 version = "0.1.0"
 edition = "2021"
+description = "Thin cross-platform functions for memory allocation, deallocation and reallocation"
+license = "GPL-3"
+repository = "https://github.com/Nereuxofficial/benemalloc"
+documentation = "https://docs.rs/allocations"
+
 
 [dependencies]
 libc = "0.2.155"
