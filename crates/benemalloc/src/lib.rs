@@ -8,7 +8,7 @@ mod tracker;
 
 use core::ffi::c_size_t;
 use std::cell::UnsafeCell;
-use std::{alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void, sync::Mutex};
+use std::{alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void};
 
 use allocations::{allocate, deallocate};
 
@@ -26,9 +26,9 @@ struct Block {
 unsafe impl Send for Block {}
 unsafe impl Sync for Block {}
 
-struct InternalState<const Size: usize> {
+struct InternalState<const SIZE: usize> {
     size: usize,
-    free_array: [Option<Block>; Size],
+    free_array: [Option<Block>; SIZE],
 }
 
 impl<const SIZE: usize> InternalState<SIZE> {
@@ -130,7 +130,7 @@ unsafe impl GlobalAlloc for BeneAlloc {
             let mut tracker = self.tracker.get().as_mut().unwrap();
             tracker.track_deallocation(layout);
         }
-        let mut state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
+        let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
         if state.size < state.free_array.len() {
             state.insert(Block {
                 size: layout.size(),
