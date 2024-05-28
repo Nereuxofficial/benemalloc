@@ -2,6 +2,7 @@ use benemalloc::BeneAlloc;
 use rand::thread_rng;
 use rand::RngCore;
 use std::{collections::BinaryHeap, hint::black_box, thread, thread::available_parallelism};
+use tracing::{info, info_span};
 
 #[global_allocator]
 static ALLOCATOR: BeneAlloc = BeneAlloc::new();
@@ -27,6 +28,16 @@ fn test_large_allocs() {
     {
         ALLOCATOR.print();
     }
+}
+
+#[test]
+fn test_vec_drop() {
+    let mut rng = thread_rng();
+    let mut vec = Vec::new();
+    for _ in 0..100 {
+        vec.push(rng.next_u64());
+    }
+    std::mem::drop(vec);
 }
 
 #[test]
@@ -100,4 +111,47 @@ fn test_box_allocation() {
     {
         ALLOCATOR.print();
     }
+}
+
+#[test]
+fn test_tokio() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let filter = tracing_subscriber::EnvFilter::from_default_env();
+        tracing_subscriber::fmt().with_env_filter(filter).init();
+        info!("Starting Tokio Test");
+        info_span!("Test").in_scope(|| {
+            info!("In Span");
+        });
+        let mut handles = vec![];
+        for _ in 0..available_parallelism().unwrap().get() {
+            let handle = tokio::spawn(async {
+                test_small_allocs();
+            });
+            handles.push(handle);
+        }
+        for handle in handles {
+            handle.await.unwrap();
+        }
+        #[cfg(feature = "track_allocations")]
+        {
+            ALLOCATOR.print();
+        }
+    });
+}
+
+#[tokio::test]
+async fn test_bene_snake_crash() {
+    color_eyre::install().unwrap();
+    dotenvy::dotenv().ok();
+    let _guard = sentry::init((
+        std::env::var("SENTRY_DSN").unwrap(),
+        sentry::ClientOptions {
+            release: sentry::release_name!(),
+            traces_sample_rate: 0.0,
+            ..Default::default()
+        },
+    ));
+
+    let env_filter = tracing_subscriber::EnvFilter::from_default_env();
 }

@@ -8,7 +8,15 @@ edition = "2021"
 [dependencies]
 benemalloc = { path = "../benemalloc" }
 rand = "0.8"
+tracing = "0.1.40"
 
 [features]
 default = []
 track_allocations = ["benemalloc/track_allocations"]
+
+[dev-dependencies]
+color-eyre = "0.6.2"
+dotenvy = "0.15.7"
+sentry = { version = "0.32.3", default-features = false, features = ["rustls", "reqwest"] }
+tokio = { version = "1.37.0", features = ["full"] }
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
