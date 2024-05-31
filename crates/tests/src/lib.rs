@@ -152,4 +152,6 @@ async fn test_bene_snake_crash() {
             ..Default::default()
         },
     ));
+
+    tracing_subscriber::EnvFilter::from_default_env();
 }
