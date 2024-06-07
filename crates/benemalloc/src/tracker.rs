@@ -3,7 +3,7 @@
 use std::alloc::Layout;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-pub(crate) struct Tracker {
+pub struct Tracker {
     //FIXME: We cannot allocate, so maybe use atomic integers?
     allocations: AtomicU64,
     allocated_size: AtomicU64,

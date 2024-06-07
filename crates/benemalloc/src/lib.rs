@@ -9,6 +9,7 @@ mod tracker;
 use core::ffi::c_size_t;
 use std::cell::UnsafeCell;
 use std::{alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void};
+use std::ops::Add;
 
 use allocations::{allocate, deallocate};
 
@@ -21,7 +22,7 @@ thread_local! {
 #[derive(Debug, Copy, Clone)]
 struct Block {
     size: c_size_t,
-    ptr: *mut u8,
+    ptr: usize
 }
 unsafe impl Send for Block {}
 unsafe impl Sync for Block {}
@@ -99,12 +100,12 @@ unsafe impl GlobalAlloc for BeneAlloc {
                         state.size -= 1;
                     }
                     debug_assert!(
-                        original_ptr as usize % layout.align() == 0,
-                        "Alignment error. ptr: {:p}, align: {}",
+                        original_ptr % layout.align() == 0,
+                        "Alignment error. ptr: {}, align: {}",
                         original_ptr,
                         layout.align()
                     );
-                    return original_ptr;
+                    return original_ptr as *mut u8;
                 }
             }
         }
@@ -134,7 +135,7 @@ unsafe impl GlobalAlloc for BeneAlloc {
         if state.size < state.free_array.len() {
             state.insert(Block {
                 size: layout.size(),
-                ptr,
+                ptr : ptr as usize,
             });
         } else {
             deallocate(ptr as *mut c_void, layout.size());
