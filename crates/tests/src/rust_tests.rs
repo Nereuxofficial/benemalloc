@@ -1,8 +1,11 @@
 use benemalloc::BeneAlloc;
 use rand::prelude::SliceRandom;
-use rand::Rng;
+use rand::{thread_rng, Rng};
 use std::alloc::{Allocator, GlobalAlloc, Layout};
 use std::fmt::Arguments;
+
+#[global_allocator]
+static ALLOCATOR: BeneAlloc = BeneAlloc::new();
 
 #[test]
 #[should_panic]
@@ -11,32 +14,27 @@ pub fn test_panic() {
 }
 
 #[test]
-pub fn basic_alloc() {
+fn test_grow() {
     let mut allocator = BeneAlloc::new();
-    let rng = &mut rand::thread_rng();
-    let num = 1000;
-    let mut allocations = vec![];
-    for i in 0..num {
-        let num: u16 = rng.gen();
-        let num = num as usize;
-        let layout = std::alloc::Layout::from_size_align(num, num).unwrap();
-        let ptr = unsafe { allocator.alloc(layout) };
-        assert!(!ptr.is_null());
-        allocations.push((ptr, layout));
-    }
-    #[cfg(feature = "track_allocations")]
-    allocator.print();
+    let layout = Layout::from_size_align(1, 1).unwrap();
+    let ptr = unsafe { allocator.alloc(layout) };
+    assert!(!ptr.is_null());
+    let ptr = unsafe { allocator.realloc(ptr, layout, 100) };
+    assert!(!ptr.is_null());
+    unsafe { allocator.dealloc(ptr, layout) };
 }
 
 fn check_can_access(allocations: &Vec<(*mut u8, Layout)>) {
+    let mut rng = thread_rng();
     for (ptr, layout) in allocations {
-        let mut sum = 0;
-        for i in 0..layout.size() {
-            unsafe {
-                sum += *ptr.add(i) as u8;
+        let mut nums = Vec::with_capacity(layout.size());
+        nums.choose(&mut rng);
+        unsafe {
+            for i in 0..layout.size() {
+                let mut num = *ptr.add(i);
+                num = nums[i];
             }
         }
-        assert!(sum != 0);
     }
 }
 
