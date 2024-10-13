@@ -71,11 +71,7 @@ impl BeneAlloc {
 
 unsafe impl GlobalAlloc for BeneAlloc {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-        #[cfg(feature = "track_allocations")]
-        {
-            let mut tracker = self.tracker.get().as_mut().unwrap();
-            tracker.track_allocation(layout);
-        }
+        
         // TODO: Get rid of bounds checks
         let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
         let freeblocks_size = state.size;
@@ -84,7 +80,7 @@ unsafe impl GlobalAlloc for BeneAlloc {
             if let Some(block) = state.free_array[i] {
                 // Since align must be a power of two and cannot be zero we can safely do new_unchecked
                 // TODO: This is somehow slower according to mca as align is first converted to NonZero
-                if block.size >= layout.size() && (block.ptr as usize % align) == 0 {
+                if block.size >= layout.size() && (block.ptr % align) == 0 {
                     let original_ptr = block.ptr;
                     if block.size > layout.size() {
                         // Split the block
@@ -111,6 +107,15 @@ unsafe impl GlobalAlloc for BeneAlloc {
         }
         let ret = allocate(layout.size());
         debug_assert!(ret as usize % layout.align() == 0);
+        #[cfg(feature = "track_allocations")]
+        {
+            use crate::tracker::Event;
+            let mut tracker = self.tracker.get().as_mut().unwrap();
+            tracker.track(Event::Alloc{
+                addr: ret as usize,
+                size: layout.size() as usize,
+            });
+        }
         ret as *mut u8
     }
 
@@ -128,8 +133,10 @@ unsafe impl GlobalAlloc for BeneAlloc {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
         #[cfg(feature = "track_allocations")]
         {
-            let mut tracker = self.tracker.get().as_mut().unwrap();
-            tracker.track_deallocation(layout);
+            self.tracker.get().as_mut().unwrap().track(tracker::Event::Free{
+                addr: ptr as usize,
+                size: layout.size() as usize,
+            });
         }
         let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
         if state.size < state.free_array.len() {

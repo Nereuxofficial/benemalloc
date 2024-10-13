@@ -2,11 +2,23 @@
 
 use std::alloc::Layout;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::alloc::System;
+use std::io::Cursor;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Serialize)]
+pub enum Event{
+    Alloc {addr: usize, size: usize},
+    Free {addr: usize, size: usize},
+    Resize{addr: usize, new_size: usize}
+}
+
 
 pub struct Tracker {
     //FIXME: We cannot allocate, so maybe use atomic integers?
     allocations: AtomicU64,
     allocated_size: AtomicU64,
+    system_alloc: System
 }
 
 impl Tracker {
@@ -14,16 +26,25 @@ impl Tracker {
         Self {
             allocations: AtomicU64::new(0),
             allocated_size: AtomicU64::new(0),
+            system_alloc: System
         }
     }
 
-    pub fn track_allocation(&mut self, layout: Layout) {
-        self.allocations.fetch_add(1, Ordering::Relaxed);
-        self.allocated_size
-            .fetch_add(layout.size() as u64, Ordering::Relaxed);
+    pub fn track(&mut self, event: Event) {
+        let mut buf = [0u8; 2048];
+        let mut cursor = Cursor::new(&mut buf[..]);
+        serde_json::to_writer(&mut cursor, &event).unwrap();
+        let end = cursor.position() as usize;
+        let section = &buf[..end];
+        self.write(&buf[..end]);
+        self.write(b"\n");
     }
-
-    pub fn track_deallocation(&mut self, layout: Layout) {}
+    fn write(&self, s: &[u8]) {
+            unsafe {
+                libc::write(libc::STDERR_FILENO, s.as_ptr() as _, s.len() as _);
+            }
+        }
+    
 
     pub fn print(&self) {
         println!("Allocations: {:?}", self.allocations);
