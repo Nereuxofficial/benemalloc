@@ -7,9 +7,11 @@
 mod tracker;
 
 use core::ffi::c_size_t;
+use std::alloc::Layout;
 use std::cell::UnsafeCell;
-use std::{alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void};
 use std::ops::Add;
+use std::ptr::addr_of_mut;
+use std::{alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void};
 
 use allocations::{allocate, deallocate};
 
@@ -22,7 +24,7 @@ thread_local! {
 #[derive(Debug, Copy, Clone)]
 struct Block {
     size: c_size_t,
-    ptr: usize
+    ptr: usize,
 }
 unsafe impl Send for Block {}
 unsafe impl Sync for Block {}
@@ -48,6 +50,8 @@ impl<const SIZE: usize> InternalState<SIZE> {
 pub struct BeneAlloc {
     #[cfg(feature = "track_allocations")]
     pub tracker: UnsafeCell<tracker::Tracker>,
+    #[cfg(feature = "debug")]
+    pub allocations: [Option<Layout>; 4096],
 }
 
 unsafe impl Sync for BeneAlloc {}
@@ -58,6 +62,8 @@ impl BeneAlloc {
         Self {
             #[cfg(feature = "track_allocations")]
             tracker: UnsafeCell::new(tracker::Tracker::new()),
+            #[cfg(feature = "debug")]
+            allocations: [None; 4096],
         }
     }
 
@@ -71,7 +77,6 @@ impl BeneAlloc {
 
 unsafe impl GlobalAlloc for BeneAlloc {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-        
         // TODO: Get rid of bounds checks
         let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
         let freeblocks_size = state.size;
@@ -101,6 +106,15 @@ unsafe impl GlobalAlloc for BeneAlloc {
                         original_ptr,
                         layout.align()
                     );
+                    #[cfg(feature = "track_allocations")]
+                    {
+                        use crate::tracker::Event;
+                        let mut tracker = self.tracker.get().as_mut().unwrap();
+                        tracker.track(Event::Alloc {
+                            addr: original_ptr as usize,
+                            size: layout.size() as usize,
+                        });
+                    }
                     return original_ptr as *mut u8;
                 }
             }
@@ -110,10 +124,12 @@ unsafe impl GlobalAlloc for BeneAlloc {
         #[cfg(feature = "track_allocations")]
         {
             use crate::tracker::Event;
+            use crate::tracker::Action;
             let mut tracker = self.tracker.get().as_mut().unwrap();
-            tracker.track(Event::Alloc{
+            tracker.track(Event::Alloc {
                 addr: ret as usize,
                 size: layout.size() as usize,
+                source: Action::System
             });
         }
         ret as *mut u8
@@ -131,20 +147,39 @@ unsafe impl GlobalAlloc for BeneAlloc {
     /// will be allocated correctly, however the old allocator will not know about it and will still track it as
     /// used memory, which may cause double frees to not be detected
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
-        #[cfg(feature = "track_allocations")]
-        {
-            self.tracker.get().as_mut().unwrap().track(tracker::Event::Free{
-                addr: ptr as usize,
-                size: layout.size() as usize,
-            });
-        }
         let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
         if state.size < state.free_array.len() {
+            #[cfg(feature = "track_allocations")]
+                {
+                    use crate::tracker::Action;
+                    self.tracker
+                        .get()
+                        .as_mut()
+                        .unwrap()
+                        .track(tracker::Event::Free {
+                            addr: ptr as usize,
+                            size: layout.size() as usize,
+                            action: Action::Cache
+                        });
+                }
             state.insert(Block {
                 size: layout.size(),
-                ptr : ptr as usize,
+                ptr: ptr as usize,
             });
         } else {
+            #[cfg(feature = "track_allocations")]
+                        {
+                            use crate::tracker::Action;
+                            self.tracker
+                                .get()
+                                .as_mut()
+                                .unwrap()
+                                .track(tracker::Event::Free {
+                                    addr: ptr as usize,
+                                    size: layout.size() as usize,
+                                    action: Action::System
+                                });
+                        }
             deallocate(ptr as *mut c_void, layout.size());
         }
     }
