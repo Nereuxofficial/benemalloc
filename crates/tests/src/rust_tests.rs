@@ -4,9 +4,6 @@ use rand::{thread_rng, Rng};
 use std::alloc::{Allocator, GlobalAlloc, Layout};
 use std::fmt::Arguments;
 
-#[global_allocator]
-static ALLOCATOR: BeneAlloc = BeneAlloc::new();
-
 #[test]
 #[should_panic]
 pub fn test_panic() {

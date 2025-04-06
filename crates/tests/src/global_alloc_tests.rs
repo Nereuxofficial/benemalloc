@@ -1,11 +1,9 @@
+use crate::ALLOCATOR;
 use benemalloc::BeneAlloc;
-use rand::{Rng, thread_rng};
 use rand::RngCore;
+use rand::{thread_rng, Rng};
 use std::{collections::BinaryHeap, hint::black_box, thread, thread::available_parallelism};
 use tracing::{info, info_span};
-
-#[global_allocator]
-static ALLOCATOR: BeneAlloc = BeneAlloc::new();
 
 #[test]
 fn test_large_allocs() {
@@ -67,7 +65,7 @@ fn test_small_allocs() {
     let binary_heap = BinaryHeap::from(vec);
     let vec = binary_heap.into_sorted_vec();
     vec.into_iter().take(10).for_each(|(k, v)| {
-        let _ =  black_box(k.abs_diff(*v));
+        let _ = black_box(k.abs_diff(*v));
     });
     #[cfg(feature = "track_allocations")]
     {
@@ -159,6 +157,6 @@ async fn test_bene_snake_crash() {
 
 #[test]
 #[should_panic]
-fn test_panic(){
+fn test_panic() {
     std::panic!("Panic!");
 }

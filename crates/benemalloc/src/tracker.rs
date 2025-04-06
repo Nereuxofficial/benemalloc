@@ -7,16 +7,27 @@ use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Copy, Serialize)]
-pub enum Action{
+pub enum Action {
     Cache,
-    System
+    System,
 }
 
 #[derive(Clone, Copy, Serialize)]
 pub enum Event {
-    Alloc { addr: usize, size: usize, source: Action},
-    Free { addr: usize, size: usize, action: Action},
-    Resize { addr: usize, new_size: usize },
+    Alloc {
+        addr: usize,
+        size: usize,
+        source: Action,
+    },
+    Free {
+        addr: usize,
+        size: usize,
+        action: Action,
+    },
+    Resize {
+        addr: usize,
+        new_size: usize,
+    },
 }
 
 pub struct Tracker {

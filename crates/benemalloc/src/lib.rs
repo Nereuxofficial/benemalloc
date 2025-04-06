@@ -108,11 +108,13 @@ unsafe impl GlobalAlloc for BeneAlloc {
                     );
                     #[cfg(feature = "track_allocations")]
                     {
+                        use crate::tracker::Action;
                         use crate::tracker::Event;
                         let mut tracker = self.tracker.get().as_mut().unwrap();
                         tracker.track(Event::Alloc {
                             addr: original_ptr as usize,
                             size: layout.size() as usize,
+                            source: Action::Cache,
                         });
                     }
                     return original_ptr as *mut u8;
@@ -123,13 +125,13 @@ unsafe impl GlobalAlloc for BeneAlloc {
         debug_assert!(ret as usize % layout.align() == 0);
         #[cfg(feature = "track_allocations")]
         {
-            use crate::tracker::Event;
             use crate::tracker::Action;
+            use crate::tracker::Event;
             let mut tracker = self.tracker.get().as_mut().unwrap();
             tracker.track(Event::Alloc {
                 addr: ret as usize,
                 size: layout.size() as usize,
-                source: Action::System
+                source: Action::System,
             });
         }
         ret as *mut u8
@@ -150,36 +152,36 @@ unsafe impl GlobalAlloc for BeneAlloc {
         let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
         if state.size < state.free_array.len() {
             #[cfg(feature = "track_allocations")]
-                {
-                    use crate::tracker::Action;
-                    self.tracker
-                        .get()
-                        .as_mut()
-                        .unwrap()
-                        .track(tracker::Event::Free {
-                            addr: ptr as usize,
-                            size: layout.size() as usize,
-                            action: Action::Cache
-                        });
-                }
+            {
+                use crate::tracker::Action;
+                self.tracker
+                    .get()
+                    .as_mut()
+                    .unwrap()
+                    .track(tracker::Event::Free {
+                        addr: ptr as usize,
+                        size: layout.size() as usize,
+                        action: Action::Cache,
+                    });
+            }
             state.insert(Block {
                 size: layout.size(),
                 ptr: ptr as usize,
             });
         } else {
             #[cfg(feature = "track_allocations")]
-                        {
-                            use crate::tracker::Action;
-                            self.tracker
-                                .get()
-                                .as_mut()
-                                .unwrap()
-                                .track(tracker::Event::Free {
-                                    addr: ptr as usize,
-                                    size: layout.size() as usize,
-                                    action: Action::System
-                                });
-                        }
+            {
+                use crate::tracker::Action;
+                self.tracker
+                    .get()
+                    .as_mut()
+                    .unwrap()
+                    .track(tracker::Event::Free {
+                        addr: ptr as usize,
+                        size: layout.size() as usize,
+                        action: Action::System,
+                    });
+            }
             deallocate(ptr as *mut c_void, layout.size());
         }
     }
