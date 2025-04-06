@@ -47,10 +47,14 @@ jobs:
       - name: Run tests in release mode
         run: cargo nextest run --release
 
+      - name: Install cargo-careful
+        uses: taiki-e/install-action
+        with:
+          tool: cargo-careful
+
       - name: Run cargo test with cargo-careful
-        run: |
-          cargo install cargo-careful
-          cargo careful test
+        run: cargo careful test
+
       - name: Run cargo doc
         if: ${{ runner.os == 'Linux' }}
         run: cargo doc --no-deps --document-private-items --all-features
