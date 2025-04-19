@@ -13,7 +13,7 @@ use std::ops::Add;
 use std::ptr::addr_of_mut;
 use std::{alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void};
 
-use allocations::{allocate, deallocate};
+use allocations::{allocate, deallocate, realloc};
 
 #[cfg(not(target_os = "macos"))]
 thread_local! {
@@ -44,6 +44,20 @@ impl<const SIZE: usize> InternalState<SIZE> {
     fn insert(&mut self, block: Block) {
         self.free_array[self.size] = Some(block);
         self.size += 1;
+    }
+
+    fn get_fitting_index(&self, size: usize, align: NonZeroUsize) -> Option<usize> {
+        let freeblocks_size = self.size;
+        for i in 0..freeblocks_size {
+            if let Some(block) = self.free_array[i] {
+                // Since align must be a power of two and cannot be zero we can safely do new_unchecked
+                // TODO: This is somehow slower according to mca as align is first converted to NonZero
+                if block.size >= size && (block.ptr % align) == 0 {
+                    return Some(i);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -80,6 +94,7 @@ unsafe impl GlobalAlloc for BeneAlloc {
         // TODO: Get rid of bounds checks
         let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
         let freeblocks_size = state.size;
+        let size = layout.size();
         let align = NonZeroUsize::new_unchecked(layout.align());
         for i in 0..freeblocks_size {
             if let Some(block) = state.free_array[i] {
@@ -144,10 +159,8 @@ unsafe impl GlobalAlloc for BeneAlloc {
     ///
     /// # Safety
     /// The caller must ensure ptr and layout are valid. Additionally, the ptr may not be used after this function is called as any use would be UAF
-    /// The caller must ensure the ptr was allocated by this allocator. This may actually be a larger
-    /// limitation than originally thought, as memory allocated from outside Rust(like from C)
-    /// will be allocated correctly, however the old allocator will not know about it and will still track it as
-    /// used memory, which may cause double frees to not be detected
+    /// The caller must ensure the ptr was allocated by this allocator. Other allocators used(say for C libraries) do need to be deallocated by
+    /// that allocator as to not corrupt this allocator's state
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
         let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
         if state.size < state.free_array.len() {
@@ -186,4 +199,39 @@ unsafe impl GlobalAlloc for BeneAlloc {
         }
     }
     // TODO: On windows alloc_zeroed initializes the memory to be zero so we could save performance by skipping directly to malloc if we need it...
+    /// Reallocate memory to fit a different memory size.
+    ///
+    /// On Unix we use realloc for this
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
+        let old_size = layout.size();
+        if let Some(idx) =
+            state.get_fitting_index(new_size, NonZeroUsize::new_unchecked(layout.align()))
+        {
+            let block = state.free_array.get_unchecked(idx).unwrap();
+            let original_ptr = block.ptr;
+            if block.size > layout.size() {
+                // Split the block
+                let new_block = Block {
+                    size: block.size - layout.size(),
+                    ptr: block.ptr.add(layout.size()),
+                };
+                state.free_array[idx] = Some(new_block);
+            } else {
+                // Place the last block at the current position
+                state.free_array[idx] = state.free_array[state.size - 1];
+                state.free_array[state.size - 1] = None;
+                state.size -= 1;
+            }
+            debug_assert!(
+                original_ptr % layout.align() == 0,
+                "Alignment error. ptr: {}, align: {}",
+                original_ptr,
+                layout.align()
+            );
+            return original_ptr as *mut u8;
+        } else {
+            realloc(ptr as *mut c_void, old_size, new_size) as *mut u8
+        }
+    }
 }

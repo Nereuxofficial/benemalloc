@@ -61,3 +61,10 @@ pub unsafe fn deallocate(ptr: *mut c_void, size: size_t) -> i32 {
         _ => -1,
     }
 }
+
+#[cfg(unix)]
+pub unsafe fn realloc(ptr: *mut c_void, old_size: size_t, new_size: size_t) -> *mut c_void {
+    use libc::MREMAP_MAYMOVE;
+
+    unsafe { libc::mremap(ptr, old_size, new_size, MREMAP_MAYMOVE) }
+}
