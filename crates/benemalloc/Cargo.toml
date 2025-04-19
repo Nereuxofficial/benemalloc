@@ -10,11 +10,12 @@ readme = "Readme.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-allocations ={ path = "../allocations", version = "0.1.0-BETA" }
+allocations = { path = "../allocations", version = "0.1.0-BETA" }
 serde_json = { version = "1.0.128", optional = true }
 libc = { version = "0.2.109", optional = true }
-serde = { version = "1.0.203", optional = true, features = ["derive"]}
+serde = { version = "1.0.203", optional = true, features = ["derive"] }
 
 [features]
 default = []
 track_allocations = ["serde_json", "libc", "serde"]
+debug = []
