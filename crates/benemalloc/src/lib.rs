@@ -10,10 +10,9 @@ use core::ffi::c_size_t;
 use std::alloc::Layout;
 use std::cell::UnsafeCell;
 use std::ops::Add;
-use std::ptr::addr_of_mut;
 use std::{alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void};
 
-use allocations::{allocate, deallocate, realloc};
+use allocations::{allocate, deallocate};
 
 #[cfg(not(target_os = "macos"))]
 thread_local! {
@@ -24,7 +23,7 @@ thread_local! {
 #[derive(Debug, Copy, Clone)]
 struct Block {
     size: c_size_t,
-    ptr: usize,
+    ptr: *mut u8,
 }
 unsafe impl Send for Block {}
 unsafe impl Sync for Block {}
@@ -52,7 +51,7 @@ impl<const SIZE: usize> InternalState<SIZE> {
             if let Some(block) = self.free_array[i] {
                 // Since align must be a power of two and cannot be zero we can safely do new_unchecked
                 // TODO: This is somehow slower according to mca as align is first converted to NonZero
-                if block.size >= size && (block.ptr % align) == 0 {
+                if block.size >= size && (block.ptr as usize % align) == 0 {
                     return Some(i);
                 }
             }
@@ -100,7 +99,7 @@ unsafe impl GlobalAlloc for BeneAlloc {
             if let Some(block) = state.free_array[i] {
                 // Since align must be a power of two and cannot be zero we can safely do new_unchecked
                 // TODO: This is somehow slower according to mca as align is first converted to NonZero
-                if block.size >= layout.size() && (block.ptr % align) == 0 {
+                if block.size >= layout.size() && (block.ptr as usize % align) == 0 {
                     let original_ptr = block.ptr;
                     if block.size > layout.size() {
                         // Split the block
@@ -116,8 +115,8 @@ unsafe impl GlobalAlloc for BeneAlloc {
                         state.size -= 1;
                     }
                     debug_assert!(
-                        original_ptr % layout.align() == 0,
-                        "Alignment error. ptr: {}, align: {}",
+                        original_ptr as usize % layout.align() == 0,
+                        "Alignment error. ptr: {:?}, align: {}",
                         original_ptr,
                         layout.align()
                     );
@@ -179,7 +178,7 @@ unsafe impl GlobalAlloc for BeneAlloc {
             }
             state.insert(Block {
                 size: layout.size(),
-                ptr: ptr as usize,
+                ptr,
             });
         } else {
             #[cfg(feature = "track_allocations")]
@@ -205,9 +204,12 @@ unsafe impl GlobalAlloc for BeneAlloc {
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
         let old_size = layout.size();
+        println!("Reallocating with realloc");
+        return allocations::realloc(ptr as *mut c_void, old_size, new_size) as *mut u8;
         if let Some(idx) =
             state.get_fitting_index(new_size, NonZeroUsize::new_unchecked(layout.align()))
         {
+            println!("Reallocating in place");
             let block = state.free_array.get_unchecked(idx).unwrap();
             let original_ptr = block.ptr;
             if block.size > layout.size() {
@@ -224,14 +226,15 @@ unsafe impl GlobalAlloc for BeneAlloc {
                 state.size -= 1;
             }
             debug_assert!(
-                original_ptr % layout.align() == 0,
-                "Alignment error. ptr: {}, align: {}",
+                original_ptr as usize % layout.align() == 0,
+                "Alignment error. ptr: {:?}, align: {}",
                 original_ptr,
                 layout.align()
             );
             return original_ptr as *mut u8;
         } else {
-            realloc(ptr as *mut c_void, old_size, new_size) as *mut u8
+            println!("Reallocating with realloc");
+            allocations::realloc(ptr as *mut c_void, old_size, new_size) as *mut u8
         }
     }
 }
