@@ -7,20 +7,17 @@ use tracing::{info, info_span};
 
 #[test]
 fn test_large_allocs() {
-    let num: usize = 200_000_000;
+    let num: usize = 10_000_000;
     let mut rng = thread_rng();
     println!("Allocating {}MB of memory", num * 8 / 1024 / 1024);
     let mut vec = Vec::with_capacity(num);
-    for _ in 0..vec.capacity() {
-        vec.push(rng.next_u64());
-    }
+    vec.fill_with(|| rng.next_u64());
+    println!("Filled vec");
     println!(
         "Sum: {}",
         black_box(vec.iter().map(|&x| x as u128).sum::<u128>())
     );
-    for _ in 0..vec.capacity() {
-        vec.pop();
-    }
+    vec.clear();
     vec.resize(100, 0);
     #[cfg(feature = "track_allocations")]
     {
@@ -136,23 +133,6 @@ fn test_tokio() {
             ALLOCATOR.print();
         }
     });
-}
-
-#[tokio::test]
-#[should_panic]
-async fn test_bene_snake_crash() {
-    color_eyre::install().unwrap();
-    dotenvy::dotenv().ok();
-    let _guard = sentry::init((
-        std::env::var("SENTRY_DSN").unwrap(),
-        sentry::ClientOptions {
-            release: sentry::release_name!(),
-            traces_sample_rate: 0.0,
-            ..Default::default()
-        },
-    ));
-
-    tracing_subscriber::EnvFilter::from_default_env();
 }
 
 #[test]

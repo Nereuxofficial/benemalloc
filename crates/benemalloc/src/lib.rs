@@ -94,7 +94,8 @@ unsafe impl GlobalAlloc for BeneAlloc {
         let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
         let freeblocks_size = state.size;
         let size = layout.size();
-        let align = NonZeroUsize::new_unchecked(layout.align());
+        // The trait guarantees us that align is not zero, so this is safe.
+        let align = unsafe { NonZeroUsize::new_unchecked(layout.align()) };
         for i in 0..freeblocks_size {
             if let Some(block) = state.free_array[i] {
                 // Since align must be a power of two and cannot be zero we can safely do new_unchecked
@@ -102,10 +103,11 @@ unsafe impl GlobalAlloc for BeneAlloc {
                 if block.size >= layout.size() && (block.ptr as usize % align) == 0 {
                     let original_ptr = block.ptr;
                     if block.size > layout.size() {
+                        let new_ptr = unsafe { block.ptr.add(layout.size()) };
                         // Split the block
                         let new_block = Block {
                             size: block.size - layout.size(),
-                            ptr: block.ptr.add(layout.size()),
+                            ptr: new_ptr,
                         };
                         state.free_array[i] = Some(new_block);
                     } else {
@@ -193,7 +195,9 @@ unsafe impl GlobalAlloc for BeneAlloc {
                         action: Action::System,
                     });
             }
-            deallocate(ptr as *mut c_void, layout.size());
+            unsafe {
+                deallocate(ptr as *mut c_void, layout.size());
+            }
         }
     }
     // TODO: On windows alloc_zeroed initializes the memory to be zero so we could save performance by skipping directly to malloc if we need it...
