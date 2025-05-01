@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [ main, dev ]
   pull_request:
-    branches: [main, dev]
+    branches: [ main, dev ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,8 +14,8 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest]
-        toolchain: [nightly]
+        os: [ ubuntu-latest ]
+        toolchain: [ nightly ]
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -24,9 +24,7 @@ jobs:
       - name: Get Rust toolchain
         uses: dtolnay/rust-toolchain@v1
         with:
-          profile: minimal
           toolchain: ${{ matrix.toolchain }}
-          override: true
 
       - name: Use Rust Cache
         if: ${{ runner.os == 'Linux' }}
@@ -71,9 +69,7 @@ jobs:
       - name: Get nightly Rust toolchain with rustfmt
         uses: dtolnay/rust-toolchain@v1
         with:
-          profile: minimal
           toolchain: nightly
-          override: true
           components: rustfmt
 
       - name: Run cargo fmt --all -- --check
@@ -88,9 +84,7 @@ jobs:
       - name: Get nightly Rust toolchain with clippy
         uses: dtolnay/rust-toolchain@v1
         with:
-          profile: minimal
           toolchain: nightly
-          override: true
           components: clippy
 
       - name: Run cargo clippy --package benemalloc --all-targets
