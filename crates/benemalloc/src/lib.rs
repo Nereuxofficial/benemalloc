@@ -150,7 +150,6 @@ unsafe impl GlobalAlloc for BeneAlloc {
         }
         ret as *mut u8
     }
-
     /// The caller must ensure the ptr and layout are valid, so we do not have to keep track of
     /// how much memory was allocated for a given pointer. This helps us, because we do not have to
     /// modify the allocated list in other threads, which would require some kind of synchronization.
@@ -198,43 +197,4 @@ unsafe impl GlobalAlloc for BeneAlloc {
         }
     }
     // TODO: On windows alloc_zeroed initializes the memory to be zero so we could save performance by skipping directly to malloc if we need it...
-    /// Reallocate memory to fit a different memory size.
-    ///
-    /// On Unix we use realloc for this
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
-        let old_size = layout.size();
-        println!("Reallocating with realloc");
-        return allocations::realloc(ptr as *mut c_void, old_size, new_size) as *mut u8;
-        if let Some(idx) =
-            state.get_fitting_index(new_size, NonZeroUsize::new_unchecked(layout.align()))
-        {
-            println!("Reallocating in place");
-            let block = state.free_array.get_unchecked(idx).unwrap();
-            let original_ptr = block.ptr;
-            if block.size > layout.size() {
-                // Split the block
-                let new_block = Block {
-                    size: block.size - layout.size(),
-                    ptr: block.ptr.add(layout.size()),
-                };
-                state.free_array[idx] = Some(new_block);
-            } else {
-                // Place the last block at the current position
-                state.free_array[idx] = state.free_array[state.size - 1];
-                state.free_array[state.size - 1] = None;
-                state.size -= 1;
-            }
-            debug_assert!(
-                original_ptr as usize % layout.align() == 0,
-                "Alignment error. ptr: {:?}, align: {}",
-                original_ptr,
-                layout.align()
-            );
-            return original_ptr as *mut u8;
-        } else {
-            println!("Reallocating with realloc");
-            allocations::realloc(ptr as *mut c_void, old_size, new_size) as *mut u8
-        }
-    }
 }
