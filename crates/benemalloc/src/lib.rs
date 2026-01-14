@@ -1,28 +1,42 @@
 //! This is a simple memory allocator written in Rust.
 // TODO: Use mremap to grow memory allocations instead of reallocating them
 // TODO: Make this work on stable, add stable to ci
-#![feature(c_size_t)]
 
 #[cfg(feature = "track_allocations")]
 mod tracker;
 
-use core::ffi::c_size_t;
-use std::alloc::Layout;
 use std::cell::UnsafeCell;
-use std::ops::Add;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{alloc::GlobalAlloc, num::NonZeroUsize, os::raw::c_void};
+
+// Global flag to disable thread-local caching when process is in unstable state
+static GLOBAL_CACHE_ENABLED: AtomicBool = AtomicBool::new(true);
+
+#[cfg(feature = "debug")]
+use std::alloc::Layout;
 
 use allocations::{allocate, deallocate};
 
 #[cfg(not(target_os = "macos"))]
 thread_local! {
     static CURRENT_THREAD_ALLOCATOR: UnsafeCell<InternalState<512>> = const {UnsafeCell::new(InternalState::new()) };
+
+    #[cfg(feature = "track_allocations")]
+    static THREAD_TRACKER: UnsafeCell<tracker::Tracker> = const {UnsafeCell::new(tracker::Tracker::new()) };
+}
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    static CURRENT_THREAD_ALLOCATOR: UnsafeCell<InternalState<512>> = const {UnsafeCell::new(InternalState::new()) };
+
+    #[cfg(feature = "track_allocations")]
+    static THREAD_TRACKER: UnsafeCell<tracker::Tracker> = const {UnsafeCell::new(tracker::Tracker::new()) };
 }
 
 // Defines the bounds of a memory block. Rust says ptr is not Thread-safe, however since we are the allocator it should be.
 #[derive(Debug, Copy, Clone)]
 struct Block {
-    size: c_size_t,
+    size: usize,
     ptr: *mut u8,
 }
 unsafe impl Send for Block {}
@@ -30,6 +44,7 @@ unsafe impl Sync for Block {}
 
 struct InternalState<const SIZE: usize> {
     size: usize,
+    // TODO: The elements should not be Option<Block> but a union since we track the size manually
     free_array: [Option<Block>; SIZE],
 }
 
@@ -61,8 +76,6 @@ impl<const SIZE: usize> InternalState<SIZE> {
 }
 
 pub struct BeneAlloc {
-    #[cfg(feature = "track_allocations")]
-    pub tracker: UnsafeCell<tracker::Tracker>,
     #[cfg(feature = "debug")]
     pub allocations: [Option<Layout>; 4096],
 }
@@ -73,8 +86,6 @@ unsafe impl Send for BeneAlloc {}
 impl BeneAlloc {
     pub const fn new() -> Self {
         Self {
-            #[cfg(feature = "track_allocations")]
-            tracker: UnsafeCell::new(tracker::Tracker::new()),
             #[cfg(feature = "debug")]
             allocations: [None; 4096],
         }
@@ -82,75 +93,98 @@ impl BeneAlloc {
 
     #[cfg(feature = "track_allocations")]
     pub fn print(&self) {
-        unsafe {
-            self.tracker.get().as_ref().unwrap().print();
-        }
+        let _ = THREAD_TRACKER.try_with(|tracker| unsafe {
+            tracker.get().as_ref().unwrap().print();
+        });
     }
 }
 
 unsafe impl GlobalAlloc for BeneAlloc {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-        // TODO: Get rid of bounds checks
-        let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
-        let freeblocks_size = state.size;
-        let size = layout.size();
-        // The trait guarantees us that align is not zero, so this is safe.
-        let align = unsafe { NonZeroUsize::new_unchecked(layout.align()) };
-        for i in 0..freeblocks_size {
-            if let Some(block) = state.free_array[i] {
-                // Since align must be a power of two and cannot be zero we can safely do new_unchecked
-                // TODO: This is somehow slower according to mca as align is first converted to NonZero
-                if block.size >= layout.size() && (block.ptr as usize % align) == 0 {
-                    let original_ptr = block.ptr;
-                    if block.size > layout.size() {
-                        let new_ptr = unsafe { block.ptr.add(layout.size()) };
-                        // Split the block
-                        let new_block = Block {
-                            size: block.size - layout.size(),
-                            ptr: new_ptr,
-                        };
-                        state.free_array[i] = Some(new_block);
-                    } else {
+        // During panic unwinding, bypass thread-local cache to avoid issues
+        if std::thread::panicking() {
+            return allocate(layout.size()) as *mut u8;
+        }
+
+        // Check global cache flag - if disabled, use system allocator
+        if !GLOBAL_CACHE_ENABLED.load(Ordering::Relaxed) {
+            return allocate(layout.size()) as *mut u8;
+        }
+
+        // Try to get a block from the cache
+        let result = CURRENT_THREAD_ALLOCATOR.try_with(|state| unsafe {
+            let state = &mut *state.get();
+            let freeblocks_size = state.size;
+            let _size = layout.size();
+            // The trait guarantees us that align is not zero, so this is safe.
+            let align = NonZeroUsize::new_unchecked(layout.align());
+
+            for i in 0..freeblocks_size {
+                if let Some(block) = state.free_array[i] {
+                    // Check if block is suitable: large enough and properly aligned
+                    if block.size >= layout.size() && (block.ptr as usize % align.get()) == 0 {
+                        let original_ptr = block.ptr;
+
+                        // Remove this block from the free list
                         // Place the last block at the current position
-                        state.free_array[i] = state.free_array[freeblocks_size - 1];
-                        state.free_array[freeblocks_size - 1] = None;
+                        state.free_array[i] = state.free_array[freeblocks_size.saturating_sub(1)];
+                        state.free_array[freeblocks_size.saturating_sub(1)] = None;
                         state.size -= 1;
+
+                        debug_assert!(
+                            original_ptr as usize % layout.align() == 0,
+                            "Alignment error. ptr: {:?}, align: {}",
+                            original_ptr,
+                            layout.align()
+                        );
+
+                        #[cfg(feature = "track_allocations")]
+                        {
+                            use crate::tracker::Action;
+                            use crate::tracker::Event;
+                            let _ = THREAD_TRACKER.try_with(|tracker| {
+                                let tracker = &mut *tracker.get();
+                                tracker.track(Event::Alloc {
+                                    addr: original_ptr as usize,
+                                    size: layout.size() as usize,
+                                    source: Action::Cache,
+                                });
+                            });
+                        }
+                        return Some(original_ptr as *mut u8);
                     }
-                    debug_assert!(
-                        original_ptr as usize % layout.align() == 0,
-                        "Alignment error. ptr: {:?}, align: {}",
-                        original_ptr,
-                        layout.align()
-                    );
-                    #[cfg(feature = "track_allocations")]
-                    {
-                        use crate::tracker::Action;
-                        use crate::tracker::Event;
-                        let mut tracker = self.tracker.get().as_mut().unwrap();
-                        tracker.track(Event::Alloc {
-                            addr: original_ptr as usize,
-                            size: layout.size() as usize,
-                            source: Action::Cache,
-                        });
-                    }
-                    return original_ptr as *mut u8;
                 }
             }
+            None
+        });
+
+        match result {
+            Ok(Some(ptr)) => ptr,
+            Ok(None) | Err(_) => {
+                // No suitable block in cache or thread-local unavailable, allocate from system
+                if result.is_err() {
+                    // Thread-local access failed, disable cache globally
+                    GLOBAL_CACHE_ENABLED.store(false, Ordering::Relaxed);
+                }
+
+                let ret = allocate(layout.size());
+                debug_assert!(ret as usize % layout.align() == 0);
+                #[cfg(feature = "track_allocations")]
+                {
+                    use crate::tracker::Action;
+                    use crate::tracker::Event;
+                    let _ = THREAD_TRACKER.try_with(|tracker| {
+                        let tracker = &mut *tracker.get();
+                        tracker.track(Event::Alloc {
+                            addr: ret as usize,
+                            size: layout.size() as usize,
+                            source: Action::System,
+                        });
+                    });
+                }
+                ret as *mut u8
+            }
         }
-        let ret = allocate(layout.size());
-        debug_assert!(ret as usize % layout.align() == 0);
-        #[cfg(feature = "track_allocations")]
-        {
-            use crate::tracker::Action;
-            use crate::tracker::Event;
-            let mut tracker = self.tracker.get().as_mut().unwrap();
-            tracker.track(Event::Alloc {
-                addr: ret as usize,
-                size: layout.size() as usize,
-                source: Action::System,
-            });
-        }
-        ret as *mut u8
     }
     /// The caller must ensure the ptr and layout are valid, so we do not have to keep track of
     /// how much memory was allocated for a given pointer. This helps us, because we do not have to
@@ -162,40 +196,66 @@ unsafe impl GlobalAlloc for BeneAlloc {
     /// The caller must ensure the ptr was allocated by this allocator. Other allocators used(say for C libraries) do need to be deallocated by
     /// that allocator as to not corrupt this allocator's state
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
-        let state = CURRENT_THREAD_ALLOCATOR.with(|state| unsafe { &mut *state.get() });
-        if state.size < state.free_array.len() {
-            #[cfg(feature = "track_allocations")]
-            {
-                use crate::tracker::Action;
-                self.tracker
-                    .get()
-                    .as_mut()
-                    .unwrap()
-                    .track(tracker::Event::Free {
-                        addr: ptr as usize,
-                        size: layout.size() as usize,
-                        action: Action::Cache,
+        // During panic unwinding, bypass thread-local cache to avoid issues
+        if std::thread::panicking() {
+            deallocate(ptr as *mut c_void, layout.size());
+            return;
+        }
+
+        // Check global cache flag - if disabled, use system allocator
+        if !GLOBAL_CACHE_ENABLED.load(Ordering::Relaxed) {
+            deallocate(ptr as *mut c_void, layout.size());
+            return;
+        }
+
+        let result = CURRENT_THREAD_ALLOCATOR.try_with(|state| unsafe {
+            let state = &mut *state.get();
+            if state.size < state.free_array.len() {
+                #[cfg(feature = "track_allocations")]
+                {
+                    use crate::tracker::Action;
+                    let _ = THREAD_TRACKER.try_with(|tracker| {
+                        let tracker = &mut *tracker.get();
+                        tracker.track(tracker::Event::Free {
+                            addr: ptr as usize,
+                            size: layout.size() as usize,
+                            action: Action::Cache,
+                        });
                     });
+                }
+                state.insert(Block {
+                    size: layout.size(),
+                    ptr,
+                });
+                true // Cached
+            } else {
+                false // Need to deallocate
             }
-            state.insert(Block {
-                size: layout.size(),
-                ptr,
-            });
-        } else {
-            #[cfg(feature = "track_allocations")]
-            {
-                use crate::tracker::Action;
-                self.tracker
-                    .get()
-                    .as_mut()
-                    .unwrap()
-                    .track(tracker::Event::Free {
-                        addr: ptr as usize,
-                        size: layout.size() as usize,
-                        action: Action::System,
+        });
+
+        match result {
+            Ok(true) => {
+                // Successfully cached in free list
+            }
+            Ok(false) => {
+                // Free list is full, deallocate via system
+                #[cfg(feature = "track_allocations")]
+                {
+                    use crate::tracker::Action;
+                    let _ = THREAD_TRACKER.try_with(|tracker| {
+                        let tracker = &mut *tracker.get();
+                        tracker.track(tracker::Event::Free {
+                            addr: ptr as usize,
+                            size: layout.size() as usize,
+                            action: Action::System,
+                        });
                     });
+                }
+                deallocate(ptr as *mut c_void, layout.size());
             }
-            unsafe {
+            Err(_) => {
+                // Thread-local is being destroyed, disable cache globally and fallback to system
+                GLOBAL_CACHE_ENABLED.store(false, Ordering::Relaxed);
                 deallocate(ptr as *mut c_void, layout.size());
             }
         }
