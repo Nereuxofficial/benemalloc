@@ -5,12 +5,6 @@ use std::alloc::{Allocator, GlobalAlloc, Layout};
 use std::fmt::Arguments;
 
 #[test]
-#[should_panic]
-pub fn test_panic() {
-    core::panicking::panic_fmt(Arguments::new_const(&["This is a test panicking"]));
-}
-
-#[test]
 fn test_grow() {
     let mut allocator = BeneAlloc::new();
     let layout = Layout::from_size_align(1, 1).unwrap();

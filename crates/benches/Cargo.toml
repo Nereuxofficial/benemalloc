@@ -1,0 +1,20 @@
+[package]
+name = "benemalloc-benches"
+version = "0.1.0"
+edition = "2021"
+description = "Benchmark harness for benemalloc memory allocator"
+license = "GPL-3.0-only"
+publish = false
+
+[[bench]]
+name = "allocator_benchmarks"
+harness = false
+
+[dependencies]
+benemalloc = { path = "../benemalloc", version = "0.1.1-BETA" }
+criterion = { version = "0.5", features = ["html_reports"] }
+rand = { version = "0.8", features = ["small_rng"] }
+tracy-client = { version = "0.18.1", features = ["debuginfod"] }
+
+[dev-dependencies]
+mimalloc = { version = "0.1", default-features = false }
