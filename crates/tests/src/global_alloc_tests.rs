@@ -1,14 +1,13 @@
 use crate::ALLOCATOR;
 use benemalloc::BeneAlloc;
-use rand::RngCore;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 use std::{collections::BinaryHeap, hint::black_box, thread, thread::available_parallelism};
 use tracing::{info, info_span};
 
 #[test]
 fn test_large_allocs() {
     let num: usize = 10_000_000;
-    let mut rng = thread_rng();
+    let mut rng = rand::rng();
     println!("Allocating {}MB of memory", num * 8 / 1024 / 1024);
     let mut vec = Vec::with_capacity(num);
     vec.fill_with(|| rng.next_u64());
@@ -27,7 +26,7 @@ fn test_large_allocs() {
 
 #[test]
 fn test_vec_drop() {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let mut vec = Vec::new();
     for _ in 0..100 {
         vec.push(rng.next_u64());
@@ -39,9 +38,9 @@ fn test_vec_drop() {
 fn test_small_allocs() {
     println!("Creating Vector...");
     let mut vec = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-    let mut rng = thread_rng();
+    let mut rng = rng();
     for _ in 0..100 {
-        vec.push(rng.gen());
+        vec.push(rng.next_u64());
     }
     for _ in 0..100 {
         vec.pop();

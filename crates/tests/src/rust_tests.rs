@@ -1,6 +1,7 @@
 use benemalloc::BeneAlloc;
 use rand::prelude::SliceRandom;
-use rand::{thread_rng, Rng};
+use rand::seq::IndexedRandom;
+use rand::Rng;
 use std::alloc::{Allocator, GlobalAlloc, Layout};
 use std::fmt::Arguments;
 
@@ -16,7 +17,7 @@ fn test_grow() {
 }
 
 fn check_can_access(allocations: &Vec<(*mut u8, Layout)>) {
-    let mut rng = thread_rng();
+    let mut rng = rand::rng();
     for (ptr, layout) in allocations {
         let mut nums = Vec::with_capacity(layout.size());
         nums.choose(&mut rng);
