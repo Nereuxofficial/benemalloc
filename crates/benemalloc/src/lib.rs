@@ -151,6 +151,7 @@ impl BeneAlloc {
 }
 
 unsafe impl GlobalAlloc for BeneAlloc {
+    #[inline]
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
         // Try to get a block from the cache
         match CURRENT_THREAD_ALLOCATOR.try_with(|state| unsafe {
