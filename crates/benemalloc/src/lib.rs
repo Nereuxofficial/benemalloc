@@ -22,7 +22,6 @@ use allocations::{allocate, deallocate};
 
 use crate::large_allocs::allocate_large;
 
-#[cfg(not(target_os = "macos"))]
 thread_local! {
     static CURRENT_THREAD_ALLOCATOR: UnsafeCell<InternalState> = const {UnsafeCell::new(InternalState::new()) };
 
@@ -55,11 +54,7 @@ impl InternalState {
         let index = Self::size_class(max(size, align));
         if index >= STEPS {
             let mut page = allocate_large(size, align);
-            // `mmap` reports failure as MAP_FAILED (`(void *) -1`
-            if page as usize == usize::MAX {
-                page = null_mut();
-            }
-            return page as *mut u8;
+            return page;
         }
 
         let ptr = self.size_classes[index];
@@ -104,6 +99,7 @@ impl InternalState {
     /// Adds one page of free segments to `index`.
     ///
     /// Returns `false` when the operating system could not supply a page.
+    // TODO: Benchmark #[cold]
     pub fn fill_size_class(&mut self, index: usize) -> bool {
         debug_assert!(index < STEPS);
         let page = allocate(PAGE_SIZE) as *mut u8;
@@ -162,10 +158,7 @@ unsafe impl GlobalAlloc for BeneAlloc {
             state.get_allocation(layout.size(), layout.align())
         }) {
             Ok(ptr) => ptr,
-            Err(_) => match allocate_large(layout.size(), layout.align()) {
-                ptr if ptr as usize == usize::MAX => std::ptr::null_mut(),
-                ptr => ptr,
-            },
+            Err(_) => allocate_large(layout.size(), layout.align()),
         }
     }
 
@@ -206,7 +199,7 @@ mod fill_size_class_tests {
     #[test]
     fn fill_size_class_populates_every_segment_in_a_page() {
         for index in 0..STEPS {
-            let mut state = InternalState::<512>::new();
+            let mut state = InternalState::new();
             assert!(state.fill_size_class(index));
 
             let head = state.size_classes[index];
@@ -225,7 +218,7 @@ mod fill_size_class_tests {
         let index = 2;
         let segment_size = 1 << (MIN_SIZE_SHIFT + index);
         let count = PAGE_SIZE / segment_size;
-        let mut state = InternalState::<512>::new();
+        let mut state = InternalState::new();
 
         assert!(state.fill_size_class(index));
         let first_page = state.size_classes[index];
