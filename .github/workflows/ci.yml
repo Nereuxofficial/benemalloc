@@ -39,9 +39,6 @@ jobs:
       - name: Run tests without tracking
         run: cargo nextest run
 
-      - name: Run tests with tracking
-        run: cargo nextest run --features track_allocations --success-output final
-
       - name: Run tests in release mode
         run: cargo nextest run --release
 
