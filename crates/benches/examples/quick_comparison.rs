@@ -1,20 +1,95 @@
-//! A lightweight comparison of BeneMalloc and the system allocator.
+//! A lightweight allocator comparison.
 //!
 //! Run with:
 //! `cargo +nightly run -p benemalloc-benches --example quick_comparison --release`
 
 use benemalloc::BeneAlloc;
+use jemallocator::Jemalloc;
+use mimalloc::MiMalloc;
 use std::alloc::{handle_alloc_error, GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 const SAMPLE_COUNT: usize = 7;
-const SINGLE_SIZES: [usize; 5] = [32, 64, 256, 1024, 4096];
+const SINGLE_SIZES: [usize; 9] = [
+    32,
+    64,
+    256,
+    1024,
+    4096,
+    8192,
+    16 * 1024,
+    64 * 1024,
+    1024 * 1024,
+];
+const BULK_SIZES: [usize; 3] = [64, 8 * 1024, 64 * 1024];
 const BULK_COUNTS: [usize; 3] = [64, 512, 2048];
-const BULK_SIZE: usize = 64;
-const BULK_OPERATIONS_PER_SAMPLE: usize = 32_768;
+const BULK_MAX_LIVE_BYTES: usize = 16 * 1024 * 1024;
+const BULK_BYTES_PER_SAMPLE: usize = 32 * 1024 * 1024;
+const BULK_MAX_OPERATIONS_PER_SAMPLE: usize = 32_768;
 
 static BENE_ALLOC: BeneAlloc = BeneAlloc::new();
+static MIMALLOC: MiMalloc = MiMalloc;
+static JEMALLOC: Jemalloc = Jemalloc;
+
+#[derive(Clone, Copy)]
+enum AllocatorKind {
+    Bene,
+    Mimalloc,
+    Jemalloc,
+    System,
+}
+
+const ALLOCATORS: [AllocatorKind; 4] = [
+    AllocatorKind::Bene,
+    AllocatorKind::Mimalloc,
+    AllocatorKind::Jemalloc,
+    AllocatorKind::System,
+];
+
+#[derive(Clone, Copy)]
+struct AllocatorSamples<T> {
+    bene: T,
+    mimalloc: T,
+    jemalloc: T,
+    system: T,
+}
+
+impl AllocatorSamples<Duration> {
+    const ZERO: Self = Self {
+        bene: Duration::ZERO,
+        mimalloc: Duration::ZERO,
+        jemalloc: Duration::ZERO,
+        system: Duration::ZERO,
+    };
+
+    fn record(&mut self, allocator: AllocatorKind, duration: Duration) {
+        match allocator {
+            AllocatorKind::Bene => self.bene = duration,
+            AllocatorKind::Mimalloc => self.mimalloc = duration,
+            AllocatorKind::Jemalloc => self.jemalloc = duration,
+            AllocatorKind::System => self.system = duration,
+        }
+    }
+
+    fn median(samples: [Self; SAMPLE_COUNT]) -> Self {
+        Self {
+            bene: median(samples.map(|sample| sample.bene)),
+            mimalloc: median(samples.map(|sample| sample.mimalloc)),
+            jemalloc: median(samples.map(|sample| sample.jemalloc)),
+            system: median(samples.map(|sample| sample.system)),
+        }
+    }
+
+    fn ns_per_operation(self, operations: usize) -> AllocatorSamples<f64> {
+        AllocatorSamples {
+            bene: ns_per_operation(self.bene, operations),
+            mimalloc: ns_per_operation(self.mimalloc, operations),
+            jemalloc: ns_per_operation(self.jemalloc, operations),
+            system: ns_per_operation(self.system, operations),
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct BulkSample {
@@ -27,7 +102,7 @@ fn layout(size: usize) -> Layout {
 }
 
 fn allocate<A: GlobalAlloc>(allocator: &A, layout: Layout) -> *mut u8 {
-    // SAFETY: `layout` has a non-zero size and comes from `Layout::from_size_align`.
+    // SAFETY: `layout` is created by `layout` above.
     let pointer = unsafe { allocator.alloc(layout) };
     if pointer.is_null() {
         handle_alloc_error(layout);
@@ -40,8 +115,7 @@ fn run_cycles<A: GlobalAlloc>(allocator: &A, layout: Layout, iterations: usize) 
         let pointer = allocate(allocator, layout);
         black_box(pointer);
 
-        // SAFETY: `pointer` was returned by `allocator` for this exact layout and
-        // has not been deallocated yet.
+        // SAFETY: `pointer` was returned by `allocator` for this exact layout.
         unsafe { allocator.dealloc(pointer, layout) };
     }
 }
@@ -52,26 +126,39 @@ fn time_cycles<A: GlobalAlloc>(allocator: &A, layout: Layout, iterations: usize)
     start.elapsed()
 }
 
-fn compare_cycles(layout: Layout, iterations: usize) -> (Duration, Duration) {
+fn time_cycles_for(allocator: AllocatorKind, layout: Layout, iterations: usize) -> Duration {
+    match allocator {
+        AllocatorKind::Bene => time_cycles(&BENE_ALLOC, layout, iterations),
+        AllocatorKind::Mimalloc => time_cycles(&MIMALLOC, layout, iterations),
+        AllocatorKind::Jemalloc => time_cycles(&JEMALLOC, layout, iterations),
+        AllocatorKind::System => time_cycles(&System, layout, iterations),
+    }
+}
+
+fn compare_cycles(layout: Layout, iterations: usize) -> AllocatorSamples<Duration> {
     let warmup_iterations = (iterations / 10).max(1_000);
-    run_cycles(&BENE_ALLOC, layout, warmup_iterations);
-    run_cycles(&System, layout, warmup_iterations);
-
-    let mut bene_samples = [Duration::ZERO; SAMPLE_COUNT];
-    let mut system_samples = [Duration::ZERO; SAMPLE_COUNT];
-
-    // Alternate the order to reduce bias from CPU frequency and background load.
-    for sample in 0..SAMPLE_COUNT {
-        if sample % 2 == 0 {
-            bene_samples[sample] = time_cycles(&BENE_ALLOC, layout, iterations);
-            system_samples[sample] = time_cycles(&System, layout, iterations);
-        } else {
-            system_samples[sample] = time_cycles(&System, layout, iterations);
-            bene_samples[sample] = time_cycles(&BENE_ALLOC, layout, iterations);
-        }
+    for allocator in ALLOCATORS {
+        run_cycles_for(allocator, layout, warmup_iterations);
     }
 
-    (median(bene_samples), median(system_samples))
+    let mut samples = [AllocatorSamples::ZERO; SAMPLE_COUNT];
+    for sample in 0..SAMPLE_COUNT {
+        // Rotate the execution order to reduce clock/frequency bias.
+        for offset in 0..ALLOCATORS.len() {
+            let allocator = ALLOCATORS[(sample + offset) % ALLOCATORS.len()];
+            samples[sample].record(allocator, time_cycles_for(allocator, layout, iterations));
+        }
+    }
+    AllocatorSamples::median(samples)
+}
+
+fn run_cycles_for(allocator: AllocatorKind, layout: Layout, iterations: usize) {
+    match allocator {
+        AllocatorKind::Bene => run_cycles(&BENE_ALLOC, layout, iterations),
+        AllocatorKind::Mimalloc => run_cycles(&MIMALLOC, layout, iterations),
+        AllocatorKind::Jemalloc => run_cycles(&JEMALLOC, layout, iterations),
+        AllocatorKind::System => run_cycles(&System, layout, iterations),
+    }
 }
 
 fn time_bulk<A: GlobalAlloc>(
@@ -93,8 +180,7 @@ fn time_bulk<A: GlobalAlloc>(
 
         let start = Instant::now();
         for &pointer in &pointers {
-            // SAFETY: every pointer was returned by `allocator` for this exact
-            // layout and each pointer is visited once in this batch.
+            // SAFETY: every pointer was returned by `allocator` for this layout.
             unsafe { allocator.dealloc(pointer, layout) };
         }
         deallocation += start.elapsed();
@@ -107,41 +193,72 @@ fn time_bulk<A: GlobalAlloc>(
     }
 }
 
-fn compare_bulk(count: usize) -> (BulkSample, BulkSample, usize) {
-    let layout = layout(BULK_SIZE);
-    let batches = (BULK_OPERATIONS_PER_SAMPLE / count).max(1);
+fn time_bulk_for(
+    allocator: AllocatorKind,
+    layout: Layout,
+    count: usize,
+    batches: usize,
+) -> BulkSample {
+    match allocator {
+        AllocatorKind::Bene => time_bulk(&BENE_ALLOC, layout, count, batches),
+        AllocatorKind::Mimalloc => time_bulk(&MIMALLOC, layout, count, batches),
+        AllocatorKind::Jemalloc => time_bulk(&JEMALLOC, layout, count, batches),
+        AllocatorKind::System => time_bulk(&System, layout, count, batches),
+    }
+}
+
+fn compare_bulk(
+    size: usize,
+    requested_count: usize,
+) -> (AllocatorSamples<BulkSample>, usize, usize) {
+    let layout = layout(size);
+    let count = capped_bulk_count(size, requested_count);
+    let target_operations =
+        (BULK_BYTES_PER_SAMPLE / size).clamp(count, BULK_MAX_OPERATIONS_PER_SAMPLE);
+    let batches = (target_operations + count - 1) / count;
     let operations = count * batches;
 
-    time_bulk(&BENE_ALLOC, layout, count, 1);
-    time_bulk(&System, layout, count, 1);
+    for allocator in ALLOCATORS {
+        time_bulk_for(allocator, layout, count, 1);
+    }
 
-    let empty = BulkSample {
-        allocation: Duration::ZERO,
-        deallocation: Duration::ZERO,
-    };
-    let mut bene_samples = [empty; SAMPLE_COUNT];
-    let mut system_samples = [empty; SAMPLE_COUNT];
-
+    let mut allocation_samples = [AllocatorSamples::ZERO; SAMPLE_COUNT];
+    let mut deallocation_samples = [AllocatorSamples::ZERO; SAMPLE_COUNT];
     for sample in 0..SAMPLE_COUNT {
-        if sample % 2 == 0 {
-            bene_samples[sample] = time_bulk(&BENE_ALLOC, layout, count, batches);
-            system_samples[sample] = time_bulk(&System, layout, count, batches);
-        } else {
-            system_samples[sample] = time_bulk(&System, layout, count, batches);
-            bene_samples[sample] = time_bulk(&BENE_ALLOC, layout, count, batches);
+        for offset in 0..ALLOCATORS.len() {
+            let allocator = ALLOCATORS[(sample + offset) % ALLOCATORS.len()];
+            let result = time_bulk_for(allocator, layout, count, batches);
+            allocation_samples[sample].record(allocator, result.allocation);
+            deallocation_samples[sample].record(allocator, result.deallocation);
         }
     }
 
-    let bene = BulkSample {
-        allocation: median(bene_samples.map(|sample| sample.allocation)),
-        deallocation: median(bene_samples.map(|sample| sample.deallocation)),
-    };
-    let system = BulkSample {
-        allocation: median(system_samples.map(|sample| sample.allocation)),
-        deallocation: median(system_samples.map(|sample| sample.deallocation)),
-    };
+    (
+        AllocatorSamples {
+            bene: BulkSample {
+                allocation: median(allocation_samples.map(|sample| sample.bene)),
+                deallocation: median(deallocation_samples.map(|sample| sample.bene)),
+            },
+            mimalloc: BulkSample {
+                allocation: median(allocation_samples.map(|sample| sample.mimalloc)),
+                deallocation: median(deallocation_samples.map(|sample| sample.mimalloc)),
+            },
+            jemalloc: BulkSample {
+                allocation: median(allocation_samples.map(|sample| sample.jemalloc)),
+                deallocation: median(deallocation_samples.map(|sample| sample.jemalloc)),
+            },
+            system: BulkSample {
+                allocation: median(allocation_samples.map(|sample| sample.system)),
+                deallocation: median(deallocation_samples.map(|sample| sample.system)),
+            },
+        },
+        count,
+        operations,
+    )
+}
 
-    (bene, system, operations)
+fn capped_bulk_count(size: usize, requested_count: usize) -> usize {
+    requested_count.min((BULK_MAX_LIVE_BYTES / size).max(1))
 }
 
 fn median(mut samples: [Duration; SAMPLE_COUNT]) -> Duration {
@@ -153,28 +270,23 @@ fn ns_per_operation(duration: Duration, operations: usize) -> f64 {
     duration.as_secs_f64() * 1_000_000_000.0 / operations as f64
 }
 
-fn comparison(bene: f64, system: f64) -> String {
-    let ratio = system / bene;
-    if (0.99..=1.01).contains(&ratio) {
-        "about equal".to_owned()
-    } else if ratio > 1.0 {
-        format!("{ratio:.2}x faster")
-    } else {
-        format!("{:.2}x slower", ratio.recip())
-    }
+fn print_header() {
+    println!(
+        "{:<24} {:>12} {:>12} {:>12} {:>12}",
+        "Workload", "Bene", "mimalloc", "jemalloc", "System"
+    );
+    println!("{}", "-".repeat(76));
 }
 
-fn print_row(label: &str, bene: f64, system: f64) {
+fn print_row(label: &str, samples: AllocatorSamples<f64>) {
     println!(
-        "{label:<18} {:>15.2} {:>15.2} {:>18}",
-        bene,
-        system,
-        comparison(bene, system),
+        "{label:<24} {:>10.2} ns {:>10.2} ns {:>10.2} ns {:>10.2} ns",
+        samples.bene, samples.mimalloc, samples.jemalloc, samples.system,
     );
 }
 
 fn main() {
-    println!("BeneMalloc quick comparison");
+    println!("Allocator quick comparison");
     println!("Median of {SAMPLE_COUNT} samples; lower is better.\n");
 
     if cfg!(debug_assertions) {
@@ -182,42 +294,40 @@ fn main() {
     }
 
     println!("Hot allocation/deallocation cycles");
-    println!(
-        "{:<18} {:>15} {:>15} {:>18}",
-        "Block size", "Bene (ns/op)", "System (ns/op)", "Bene vs system"
-    );
-    println!("{}", "-".repeat(70));
-
+    print_header();
     for size in SINGLE_SIZES {
-        let iterations = (16 * 1024 * 1024 / size).clamp(10_000, 500_000);
-        let (bene, system) = compare_cycles(layout(size), iterations);
-        print_row(
-            &format!("{size} B"),
-            ns_per_operation(bene, iterations),
-            ns_per_operation(system, iterations),
-        );
+        let iterations = (16 * 1024 * 1024 / size).clamp(1_000, 500_000);
+        let samples = compare_cycles(layout(size), iterations).ns_per_operation(iterations);
+        print_row(&format!("{size} B"), samples);
     }
 
-    println!("\nBulk phases ({BULK_SIZE} B blocks)");
-    println!(
-        "{:<18} {:>15} {:>15} {:>18}",
-        "Batch / phase", "Bene (ns/op)", "System (ns/op)", "Bene vs system"
-    );
-    println!("{}", "-".repeat(70));
-
-    for count in BULK_COUNTS {
-        let (bene, system, operations) = compare_bulk(count);
-        print_row(
-            &format!("{count} allocate"),
-            ns_per_operation(bene.allocation, operations),
-            ns_per_operation(system.allocation, operations),
-        );
-        print_row(
-            &format!("{count} deallocate"),
-            ns_per_operation(bene.deallocation, operations),
-            ns_per_operation(system.deallocation, operations),
-        );
+    println!("\nBulk allocation and deallocation phases");
+    print_header();
+    for size in BULK_SIZES {
+        let mut previous_count = None;
+        for requested_count in BULK_COUNTS {
+            let count = capped_bulk_count(size, requested_count);
+            if previous_count == Some(count) {
+                continue;
+            }
+            previous_count = Some(count);
+            let (samples, count, operations) = compare_bulk(size, requested_count);
+            let allocation = AllocatorSamples {
+                bene: ns_per_operation(samples.bene.allocation, operations),
+                mimalloc: ns_per_operation(samples.mimalloc.allocation, operations),
+                jemalloc: ns_per_operation(samples.jemalloc.allocation, operations),
+                system: ns_per_operation(samples.system.allocation, operations),
+            };
+            let deallocation = AllocatorSamples {
+                bene: ns_per_operation(samples.bene.deallocation, operations),
+                mimalloc: ns_per_operation(samples.mimalloc.deallocation, operations),
+                jemalloc: ns_per_operation(samples.jemalloc.deallocation, operations),
+                system: ns_per_operation(samples.system.deallocation, operations),
+            };
+            print_row(&format!("{size} B × {count} allocate"), allocation);
+            print_row(&format!("{size} B × {count} deallocate"), deallocation);
+        }
     }
 
-    println!("Use `cargo bench` for statistically rigorous measurements and reports.");
+    println!("\nUse `cargo bench` for statistically rigorous measurements and reports.");
 }
