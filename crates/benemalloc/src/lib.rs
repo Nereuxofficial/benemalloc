@@ -1,139 +1,267 @@
-//! This is a simple memory allocator written in Rust.
-// TODO: Use mremap to grow memory allocations instead of reallocating them
-// TODO: Make this work on stable, add stable to ci
+//! Thread-owned spans with intrusive local and remote free lists.
 
 mod large_allocs;
 #[cfg(feature = "track_allocations")]
 mod tracker;
 
-use std::cell::UnsafeCell;
-use std::cmp::max;
-use std::ptr::null_mut;
-use std::{alloc::GlobalAlloc, os::raw::c_void};
-
-const STEPS: usize = 10;
-const PAGE_SIZE: usize = 4096;
-const MIN_SIZE_SHIFT: usize = 3;
-
-#[cfg(feature = "debug")]
-use std::alloc::Layout;
-
 use allocations::{allocate, deallocate};
+use std::alloc::{GlobalAlloc, Layout};
+use std::cell::{Cell, UnsafeCell};
+use std::ptr::null_mut;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
-use crate::large_allocs::allocate_large;
+const STEPS: usize = 20;
+const MIN_SIZE_SHIFT: usize = 3;
+const COLLECTION_INTERVAL: usize = 256;
+static NEXT_OWNER: AtomicUsize = AtomicUsize::new(1);
 
-thread_local! {
-    static CURRENT_THREAD_ALLOCATOR: UnsafeCell<InternalState> = const {UnsafeCell::new(InternalState::new()) };
-
-    #[cfg(feature = "track_allocations")]
-    static THREAD_TRACKER: UnsafeCell<tracker::Tracker> = const {UnsafeCell::new(tracker::Tracker::new()) };
-}
-
-// A segment in a page
 #[repr(C)]
 struct SegmentHeader {
     next: *mut SegmentHeader,
 }
 
-struct InternalState {
-    // Size classes up to 2^STEPS
-    // On deallocation a thread has to (somehow) contact every other thread to deallocate memory
-    size_classes: [*mut SegmentHeader; STEPS],
+// Only the current owner accesses this state. No mutable reference to the
+// whole Span may exist while remote producers access its atomic fields.
+struct LocalSpan {
+    free: *mut SegmentHeader,
+    live_count: usize,
+    next: *mut Span,
 }
 
-impl InternalState {
+struct Span {
+    local: UnsafeCell<LocalSpan>,
+    remote: AtomicPtr<SegmentHeader>,
+    owner: AtomicUsize,
+    class: usize,
+    mapping_len: usize,
+}
+
+struct Orphans(*mut Span);
+// The mutex transfers exclusive ownership of the list and its LocalSpan fields.
+unsafe impl Send for Orphans {}
+static ORPHANS: Mutex<Orphans> = Mutex::new(Orphans(null_mut()));
+
+struct Heap {
+    id: usize,
+    classes: [*mut Span; STEPS],
+    ticks: usize,
+}
+
+impl Heap {
     const fn new() -> Self {
-        // The smallest size there can be is sizeof(SegmentHeader)
         Self {
-            size_classes: [null_mut(); STEPS],
+            id: 0,
+            classes: [null_mut(); STEPS],
+            ticks: 0,
         }
     }
 
-    #[inline]
-    fn get_allocation(&mut self, size: usize, align: usize) -> *mut u8 {
-        let index = Self::size_class(max(size, align));
-        if index >= STEPS {
-            let mut page = allocate_large(size, align);
-            return page;
-        }
-
-        let ptr = self.size_classes[index];
-        // TODO: Simplify this
-        if !ptr.is_null() {
-            self.size_classes[index] = unsafe { (*ptr).next };
-        } else {
-            if self.fill_size_class(index) {
-                let ptr = self.size_classes[index];
-                self.size_classes[index] = unsafe { (*ptr).next };
-                return ptr as *mut u8;
-            } else {
-                return null_mut();
-            }
-        }
-        ptr as *mut u8
-    }
-
-    fn deallocate(&mut self, ptr: *mut SegmentHeader, size: usize, align: usize) {
-        let index = Self::size_class(max(size, align));
-        if index >= STEPS {
-            // SAFETY: Because this is our allocation and it's not in a size class, we can safely deallocate
-            // it as it must have been allocated with `allocate`.
-            unsafe {
-                return large_allocs::free_large(ptr as *mut u8);
-            }
-        }
-        let next_ptr = self.size_classes[index];
-        unsafe { (*ptr).next = next_ptr };
-        self.size_classes[index] = ptr;
-    }
-
-    #[inline]
-    fn size_class(size: usize) -> usize {
-        let size = size.max(1usize << MIN_SIZE_SHIFT);
-
-        let shift = usize::BITS as usize - (size - 1).leading_zeros() as usize;
-
-        shift - MIN_SIZE_SHIFT
-    }
-
-    /// Adds one page of free segments to `index`.
-    ///
-    /// Returns `false` when the operating system could not supply a page.
-    // TODO: Benchmark #[cold]
-    pub fn fill_size_class(&mut self, index: usize) -> bool {
-        debug_assert!(index < STEPS);
-        let page = allocate(PAGE_SIZE) as *mut u8;
-        // `mmap` reports failure as MAP_FAILED (`(void *) -1`), while
-        // VirtualAlloc reports it as null.
-        if page.is_null() || page as usize == usize::MAX {
-            return false;
-        }
-
-        // Split pages into segments and write a SegmentHeader at the start of each segment
-        let segment_size = 1 << (MIN_SIZE_SHIFT + index);
-        let count = PAGE_SIZE / segment_size;
-        for i in 0..count {
-            let segment = unsafe { page.add(i * segment_size) } as *mut SegmentHeader;
-            let next_segment_ptr = if i + 1 < count {
-                (unsafe { page.add((i + 1) * segment_size) }) as *mut SegmentHeader
-            } else {
-                self.size_classes[index]
+    fn initialize(&mut self) -> bool {
+        if self.id == 0 {
+            // Never reuse identities, including when a TLS address is reused.
+            let Ok(id) =
+                NEXT_OWNER.try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            else {
+                return false;
             };
-            unsafe { (*segment).next = next_segment_ptr };
+            self.id = id;
+            self.collect();
         }
-        self.size_classes[index] = page as *mut _;
         true
     }
+
+    fn class(layout: Layout) -> usize {
+        let size = layout.size().max(layout.align()).max(1 << MIN_SIZE_SHIFT);
+        usize::BITS as usize - (size - 1).leading_zeros() as usize - MIN_SIZE_SHIFT
+    }
+
+    // Detach first as producers may immediately start building a new inbox.
+    unsafe fn drain(span: *mut Span) {
+        unsafe {
+            let mut item = (*span).remote.swap(null_mut(), Ordering::Acquire);
+            let local = &mut *(*span).local.get();
+            while !item.is_null() {
+                let next = (*item).next;
+                (*item).next = local.free;
+                local.free = item;
+                local.live_count -= 1;
+                item = next;
+            }
+        }
+    }
+
+    fn collect(&mut self) {
+        // Do not hold the pool lock while walking inboxes or unmapping memory.
+        let mut orphan = {
+            let mut pool = ORPHANS.lock().unwrap_or_else(|e| e.into_inner());
+            std::mem::replace(&mut pool.0, null_mut())
+        };
+        unsafe {
+            while !orphan.is_null() {
+                let next = (*(*orphan).local.get()).next;
+                let class = (*orphan).class;
+                (*orphan).owner.store(self.id, Ordering::Release);
+                (*(*orphan).local.get()).next = self.classes[class];
+                self.classes[class] = orphan;
+                orphan = next;
+            }
+            for head in &mut self.classes {
+                let mut link = head as *mut *mut Span;
+                let mut kept_empty = false;
+                while !(*link).is_null() {
+                    let span = *link;
+                    Self::drain(span);
+                    let local = &mut *(*span).local.get();
+                    if local.live_count == 0 && kept_empty {
+                        *link = local.next;
+                        let len = (*span).mapping_len;
+                        deallocate(span.cast(), len);
+                    } else {
+                        kept_empty |= local.live_count == 0;
+                        link = &mut local.next;
+                    }
+                }
+            }
+        }
+    }
+
+    fn fill_size_class(&mut self, class: usize) -> bool {
+        let size = 1usize << (MIN_SIZE_SHIFT + class);
+        // Each slot reserves one size-aligned prefix region followed by its
+        // payload. The last pointer before the payload identifies the span.
+        let stride = size * 2;
+        let count = (4096 / stride).max(8);
+        let len = size_of::<Span>() + size - 1 + count * stride;
+        let base = allocate(len).cast::<u8>();
+        if base.is_null() || base as usize == usize::MAX {
+            return false;
+        }
+        unsafe {
+            let span = base.cast::<Span>();
+            let start = base.add(size_of::<Span>());
+            let offset = start.align_offset(size);
+            let payload = start.add(offset + size);
+            let mut free = null_mut();
+            for i in (0..count).rev() {
+                let ptr = payload.add(i * stride).cast::<SegmentHeader>();
+                ptr.cast::<*mut Span>().sub(1).write(span);
+                ptr.write(SegmentHeader { next: free });
+                free = ptr;
+            }
+            span.write(Span {
+                local: UnsafeCell::new(LocalSpan {
+                    free,
+                    live_count: 0,
+                    next: self.classes[class],
+                }),
+                remote: AtomicPtr::new(null_mut()),
+                owner: AtomicUsize::new(self.id),
+                class,
+                mapping_len: len,
+            });
+            self.classes[class] = span;
+        }
+        true
+    }
+
+    fn alloc(&mut self, layout: Layout) -> *mut u8 {
+        let class = Self::class(layout);
+        if class >= STEPS || !self.initialize() {
+            return large_allocs::allocate_large(layout.size(), layout.align());
+        }
+        self.ticks += 1;
+        if self.ticks == COLLECTION_INTERVAL {
+            self.ticks = 0;
+            self.collect();
+        }
+        unsafe {
+            let mut span = self.classes[class];
+            while !span.is_null() {
+                if (*(*span).local.get()).free.is_null() {
+                    Self::drain(span);
+                }
+                let local = &mut *(*span).local.get();
+                if !local.free.is_null() {
+                    let ptr = local.free;
+                    local.free = (*ptr).next;
+                    local.live_count += 1;
+                    return ptr.cast();
+                }
+                span = local.next;
+            }
+            if !self.fill_size_class(class) {
+                return null_mut();
+            }
+            let local = &mut *(*self.classes[class]).local.get();
+            let ptr = local.free;
+            local.free = (*ptr).next;
+            local.live_count += 1;
+            ptr.cast()
+        }
+    }
 }
 
+impl Drop for Heap {
+    fn drop(&mut self) {
+        // TLS cannot be used by a new caller once its destructor starts.
+        // Outstanding includes producers that have not published yet.
+        unsafe {
+            let mut pool = ORPHANS.lock().unwrap_or_else(|e| e.into_inner());
+            for head in &mut self.classes {
+                let mut span = std::mem::replace(head, null_mut());
+                while !span.is_null() {
+                    Self::drain(span);
+                    let local = &mut *(*span).local.get();
+                    let next = local.next;
+                    if local.live_count == 0 {
+                        deallocate(span.cast(), (*span).mapping_len);
+                    } else {
+                        (*span).owner.store(0, Ordering::Release);
+                        local.next = pool.0;
+                        pool.0 = span;
+                    }
+                    span = next;
+                }
+            }
+        }
+    }
+}
+
+struct ThreadHeap {
+    heap: UnsafeCell<Heap>,
+    busy: Cell<bool>,
+}
+impl ThreadHeap {
+    fn with<R>(&self, f: impl FnOnce(&mut Heap) -> R) -> Option<R> {
+        if self.busy.replace(true) {
+            return None;
+        }
+        struct Reset<'a>(&'a Cell<bool>);
+        impl Drop for Reset<'_> {
+            fn drop(&mut self) {
+                self.0.set(false);
+            }
+        }
+        let _reset = Reset(&self.busy);
+        Some(f(unsafe { &mut *self.heap.get() }))
+    }
+}
+thread_local! {
+    static CURRENT_THREAD_ALLOCATOR: ThreadHeap = const {
+        ThreadHeap { heap: UnsafeCell::new(Heap::new()), busy: Cell::new(false) }
+    };
+    #[cfg(feature = "track_allocations")]
+    static THREAD_TRACKER: UnsafeCell<tracker::Tracker> = const {
+        UnsafeCell::new(tracker::Tracker::new())
+    };
+}
+
+/// Stateless handle to the current thread's heap.
 pub struct BeneAlloc {
     #[cfg(feature = "debug")]
     pub allocations: [Option<Layout>; 4096],
 }
-
-unsafe impl Sync for BeneAlloc {}
-unsafe impl Send for BeneAlloc {}
-
 impl BeneAlloc {
     pub const fn new() -> Self {
         Self {
@@ -142,102 +270,81 @@ impl BeneAlloc {
         }
     }
 
+    /// Adopt abandoned spans, drain remote returns, and release surplus empty
+    /// spans. Retains at most one empty span per class in this thread's heap.
+    pub fn collect(&self) {
+        let _ = CURRENT_THREAD_ALLOCATOR.try_with(|tls| {
+            tls.with(|heap| {
+                if heap.initialize() {
+                    heap.collect();
+                }
+            })
+        });
+    }
+
     #[cfg(feature = "track_allocations")]
     pub fn print(&self) {
-        let _ = THREAD_TRACKER.try_with(|tracker| unsafe {
-            tracker.get().as_ref().unwrap().print();
-        });
+        let _ = THREAD_TRACKER.try_with(|tracker| unsafe { (&*tracker.get()).print() });
     }
 }
 
 unsafe impl GlobalAlloc for BeneAlloc {
     #[inline]
-    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-        // Try to get a block from the cache
-        match CURRENT_THREAD_ALLOCATOR.try_with(|state| unsafe {
-            let state = &mut *state.get();
-            state.get_allocation(layout.size(), layout.align())
-        }) {
-            Ok(ptr) => ptr,
-            Err(_) => allocate_large(layout.size(), layout.align()),
-        }
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        CURRENT_THREAD_ALLOCATOR
+            .try_with(|tls| tls.with(|heap| heap.alloc(layout)))
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| large_allocs::allocate_large(layout.size(), layout.align()))
     }
 
-    /// The caller must ensure the ptr and layout are valid, so we do not have to keep track of
-    /// how much memory was allocated for a given pointer. This helps us, because we do not have to
-    /// modify the allocated list in other threads, which would require some kind of synchronization.
-    /// Instead, we can add it to the local `free` list or deallocate it directly.
-    ///
-    /// # Safety
-    /// The caller must ensure ptr and layout are valid. Additionally, the ptr may not be used after this function is called as any use would be UAF
-    /// The caller must ensure the ptr was allocated by this allocator. Other allocators used(say for C libraries) do need to be deallocated by
-    /// that allocator as to not corrupt this allocator's state
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
-        let _ = CURRENT_THREAD_ALLOCATOR.try_with(|state| {
-            let state = unsafe { &mut *state.get() };
-            state.deallocate(ptr as *mut SegmentHeader, layout.size(), layout.align());
-        });
+    #[inline]
+    unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+        unsafe {
+            // Both allocation routes carry this prefix. Null marks a standalone
+            // mapping, including allocations made during TLS teardown/reentry.
+            let span = ptr.cast::<*mut Span>().sub(1).read();
+            if span.is_null() {
+                large_allocs::free_large(ptr);
+                return;
+            }
+            let item = ptr.cast::<SegmentHeader>();
+            let local = CURRENT_THREAD_ALLOCATOR
+                .try_with(|tls| {
+                    tls.with(|heap| {
+                        if heap.id == 0 || (*span).owner.load(Ordering::Acquire) != heap.id {
+                            return false;
+                        }
+                        let local = &mut *(*span).local.get();
+                        (*item).next = local.free;
+                        local.free = item;
+                        local.live_count -= 1;
+                        true
+                    })
+                })
+                .ok()
+                .flatten()
+                .unwrap_or(false);
+            if local {
+                return;
+            }
+
+            // This allocation remains counted until an owner drains it.
+            // Producers never dereference the observed head, so detaching and
+            // reusing that head cannot invalidate a producer's reads.
+            let inbox = &(*span).remote;
+            let mut head = inbox.load(Ordering::Relaxed);
+            loop {
+                (*item).next = head;
+                match inbox.compare_exchange_weak(head, item, Ordering::Release, Ordering::Relaxed)
+                {
+                    Ok(_) => return, // No span/item access after publication.
+                    Err(current) => head = current,
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
-mod fill_size_class_tests {
-    use super::*;
-
-    unsafe fn assert_page_chain(head: *mut SegmentHeader, segment_size: usize) {
-        let count = PAGE_SIZE / segment_size;
-        let mut current = head;
-
-        for i in 0..count {
-            let expected = unsafe { head.byte_add(i * segment_size).cast() };
-            assert_eq!(current, expected);
-            current = unsafe { (*current).next };
-        }
-
-        assert!(current.is_null());
-    }
-
-    #[test]
-    fn fill_size_class_populates_every_segment_in_a_page() {
-        for index in 0..STEPS {
-            let mut state = InternalState::new();
-            assert!(state.fill_size_class(index));
-
-            let head = state.size_classes[index];
-            assert!(!head.is_null());
-            let segment_size = 1 << (MIN_SIZE_SHIFT + index);
-
-            unsafe {
-                assert_page_chain(head, segment_size);
-                deallocate(head.cast(), PAGE_SIZE);
-            }
-        }
-    }
-
-    #[test]
-    fn refill_prepends_a_page_without_losing_the_existing_free_list() {
-        let index = 2;
-        let segment_size = 1 << (MIN_SIZE_SHIFT + index);
-        let count = PAGE_SIZE / segment_size;
-        let mut state = InternalState::new();
-
-        assert!(state.fill_size_class(index));
-        let first_page = state.size_classes[index];
-        assert!(state.fill_size_class(index));
-        let second_page = state.size_classes[index];
-
-        assert_ne!(second_page, first_page);
-        unsafe {
-            let mut current = second_page;
-            for i in 0..count {
-                assert_eq!(current, second_page.byte_add(i * segment_size).cast());
-                current = (*current).next;
-            }
-            assert_eq!(current, first_page);
-            assert_page_chain(first_page, segment_size);
-
-            deallocate(first_page.cast(), PAGE_SIZE);
-            deallocate(second_page.cast(), PAGE_SIZE);
-        }
-    }
-}
+mod tests;
