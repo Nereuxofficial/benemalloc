@@ -1,8 +1,6 @@
 //! Thread-owned spans with intrusive local and remote free lists.
 
 mod large_allocs;
-#[cfg(feature = "track_allocations")]
-mod tracker;
 
 use allocations::{allocate, deallocate};
 use std::alloc::{GlobalAlloc, Layout};
@@ -251,10 +249,6 @@ thread_local! {
     static CURRENT_THREAD_ALLOCATOR: ThreadHeap = const {
         ThreadHeap { heap: UnsafeCell::new(Heap::new()), busy: Cell::new(false) }
     };
-    #[cfg(feature = "track_allocations")]
-    static THREAD_TRACKER: UnsafeCell<tracker::Tracker> = const {
-        UnsafeCell::new(tracker::Tracker::new())
-    };
 }
 
 /// Stateless handle to the current thread's heap.
@@ -280,11 +274,6 @@ impl BeneAlloc {
                 }
             })
         });
-    }
-
-    #[cfg(feature = "track_allocations")]
-    pub fn print(&self) {
-        let _ = THREAD_TRACKER.try_with(|tracker| unsafe { (&*tracker.get()).print() });
     }
 }
 
